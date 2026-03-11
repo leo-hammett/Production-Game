@@ -9,6 +9,13 @@ export interface NormalDistribution {
   // variance?: number; should be a function, otherwise it might unsync...
 }
 
+export interface RawStationTaskTimes {
+  timeTaken: number;
+  numberOfItems: number; // if many are done at once we need to know this as it'll need to be weighted differently when merging distributuions
+  employeeLockedInNess: number;
+  standardTime: number;
+}
+
 // Station type representing a production workstation/cell
 export interface Station {
   id: string;
@@ -19,12 +26,13 @@ export interface Station {
   stdDevProcessingTime: number;
   // Capacity and constraints
   batchCapacity: number; // Max units that can be processed simultaneously
-  setupTime: number; // Fixed setup time in SECONDS
+  setupTime: number; // Fixed setup time in SECONDS (probably redundant)
   // Current state
   isActive: boolean;
   speedMultiplier: number; // Speed override factor (default 1.0)
 }
 
+//Likely just grouped numerically
 export type StationType =
   | "cutting"
   | "folding"
@@ -34,7 +42,9 @@ export type StationType =
   | "quality_control"
   | "other";
 
-// Station configuration for different product sizes
+// Station configuration for different product sizes, based on the station this will vary.
+// Paper will have sizes 1,2,3 based on fold count.
+// Verses will have 2,4,6 based on number of verses etc etc. WE MAY CHANGE THIS IF 4 lines not double 2?
 export interface StationSizeConfig {
   sizeMultipliers: {
     A5: number;
@@ -85,7 +95,7 @@ export class StationManager {
 // Global station manager instance (or you can instantiate per component)
 export const stationManager = new StationManager();
 
-export function calculateStationCompletionTime(
+export function calculateStationOccupationTimePerOrder(
   station: Station,
   order: Order,
 ): NormalDistribution {
@@ -101,28 +111,28 @@ export function calculateStationCompletionTime(
   };
 }
 
-export function calculateStationItemDistribution(
+export function calculateStationItemTimeDistribution(
   station: Station,
-  order: Order
+  order: Order,
 ): NormalDistribution {
   // This function is for a single item in an order
   // TODO: Calculate processing time distribution for one item
   // Include handover time distribution
-  
+
   return {
     mean: 0,
-    stdDev: 0
+    stdDev: 0,
   };
 }
 
 // Calculate handover time between stations
 export function calculateHandoverDistribution(
   fromStation: Station,
-  toStation: Station
+  toStation: Station,
 ): NormalDistribution {
   // TODO: Add handover time distribution between stations
   return {
     mean: 0,
-    stdDev: 0
+    stdDev: 0,
   };
 }
