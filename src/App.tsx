@@ -29,7 +29,6 @@ interface Order {
   dueTime?: number;
 }
 
-
 interface PaperInventory {
   [color: string]: number;
 }
@@ -41,7 +40,8 @@ interface Transaction {
   type: "cash" | "paper";
   paperColor?: string;
   paperQuantity?: number;
-  reason?: string;  // Optional reason
+  reason?: string; // Optional reason
+  affectsInventory?: boolean; // For non-paper inventory purchases
 }
 
 let OCCASIONS = [
@@ -97,9 +97,7 @@ function App() {
   const occasionInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
     {},
   );
-  const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
-    {},
-  );
+  const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const [activeColorIndex, setActiveColorIndex] = useState(-1);
   const [colorSearch, setColorSearch] = useState("");
   const [filteredColors, setFilteredColors] = useState<string[]>([]);
@@ -114,7 +112,7 @@ function App() {
     s: 0,
   });
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [cash, setCash] = useState(0);  // Game starts with no cash
+  const [cash, setCash] = useState(0); // Game starts with no cash
   const [safetyStock, setSafetyStock] = useState(12);
   const [buyingCooldown, setBuyingCooldown] = useState(0);
   const [cooldownTimer, setCooldownTimer] = useState<NodeJS.Timeout | null>(
@@ -158,25 +156,29 @@ function App() {
 
   // Get color name from code
   const getColorName = (code: string) => {
-    const color = PAPER_COLORS.find(c => c.code === code);
+    const color = PAPER_COLORS.find((c) => c.code === code);
     return color?.name || code;
   };
 
   // Get color code from name
   const getColorCode = (name: string) => {
-    const color = PAPER_COLORS.find(c => c.name.toLowerCase() === name.toLowerCase());
+    const color = PAPER_COLORS.find(
+      (c) => c.name.toLowerCase() === name.toLowerCase(),
+    );
     return color?.code || name;
   };
 
   // Get color price from code
   const getColorPrice = (code: string) => {
-    const color = PAPER_COLORS.find(c => c.code === code);
+    const color = PAPER_COLORS.find((c) => c.code === code);
     return color?.price || 10;
   };
 
   // Color mapping for paper colors
   const getColorClass = (color: PaperColor) => {
-    const colorDef = PAPER_COLORS.find(c => c.code === color || c.name === color);
+    const colorDef = PAPER_COLORS.find(
+      (c) => c.code === color || c.name === color,
+    );
     return colorDef?.class || "bg-gray-100";
   };
 
@@ -197,9 +199,9 @@ function App() {
   // Format order time
   const formatOrderTime = (timestamp: number) => {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-GB', { 
-      hour: '2-digit', 
-      minute: '2-digit'
+    return date.toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -249,8 +251,10 @@ function App() {
     if (recentPassiveIndex !== -1) {
       setOrders(
         orders.map((order, index) =>
-          index === recentPassiveIndex ? { ...order, status: "deleted" as OrderStatus } : order
-        )
+          index === recentPassiveIndex
+            ? { ...order, status: "deleted" as OrderStatus }
+            : order,
+        ),
       );
     }
   };
@@ -297,17 +301,17 @@ function App() {
     };
 
     if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
     }
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, [isDragging]);
 
@@ -361,11 +365,23 @@ function App() {
       },
       0,
     );
-    return cash + paperValue;
+
+    // Add value of other inventory purchases (marked as affecting inventory)
+    const otherInventoryValue = transactions
+      .filter((t) => t.type === "cash" && t.affectsInventory && t.amount < 0)
+      .reduce((total, t) => total + Math.abs(t.amount), 0);
+
+    return cash + paperValue + otherInventoryValue;
   };
 
+  // Calculate actual profit if we had to sell inventory at end-game markdown price
+  // Paper inventory is worth less when selling at game end (70% of purchase price)
+  // Cash remains at full value
   const calculateProfit = () => {
-    return calculateNetWorth(); // Game starts with £0
+    const netWorth = calculateNetWorth();
+    const inventoryValue = netWorth - cash; // Total value in inventory
+    const finalSellValue = inventoryValue * SELL_MARKDOWN; // Inventory at final selling price
+    return cash + finalSellValue; // Cash + discounted inventory
   };
 
   // Add new transaction
@@ -374,6 +390,7 @@ function App() {
     reason: string,
     paperColor?: string,
     paperQuantity?: number,
+    affectsInventory?: boolean,
   ) => {
     const newTransaction: Transaction = {
       id: Date.now().toString(),
@@ -383,6 +400,7 @@ function App() {
       paperColor,
       paperQuantity,
       reason,
+      affectsInventory,
     };
 
     setTransactions([...transactions, newTransaction]);
@@ -482,7 +500,10 @@ function App() {
       {/* Two-pane section */}
       <div className="flex relative">
         {/* Left Pane - Order Management */}
-        <div className="bg-white border-r border-gray-300" style={{ width: `${leftPaneWidth}%` }}>
+        <div
+          className="bg-white border-r border-gray-300"
+          style={{ width: `${leftPaneWidth}%` }}
+        >
           <div className="p-2">
             <div className="flex justify-between items-center mb-1">
               <h2 className="text-base font-bold text-gray-800">
@@ -495,16 +516,36 @@ function App() {
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 border-b">
                   <tr>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Time</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Qty</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Lead</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Color</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Size</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Verse</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Occasion</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Price</th>
-                    <th className="px-2 py-1 text-center text-xs whitespace-nowrap">Avail</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Status</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Time
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Qty
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Lead
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Color
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Size
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Verse
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Occasion
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Price
+                    </th>
+                    <th className="px-2 py-1 text-center text-xs whitespace-nowrap">
+                      Avail
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Status
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -519,11 +560,17 @@ function App() {
                           value={formatOrderTime(order.orderTime)}
                           onChange={(e) => {
                             const timeStr = e.target.value;
-                            const [hours, minutes] = timeStr.split(':').map(Number);
+                            const [hours, minutes] = timeStr
+                              .split(":")
+                              .map(Number);
                             if (!isNaN(hours) && !isNaN(minutes)) {
                               const newDate = new Date(order.orderTime);
                               newDate.setHours(hours, minutes);
-                              updateOrder(order.id, "orderTime", newDate.getTime());
+                              updateOrder(
+                                order.id,
+                                "orderTime",
+                                newDate.getTime(),
+                              );
                             }
                           }}
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
@@ -561,27 +608,38 @@ function App() {
                       </td>
                       <td className="px-2 py-1 relative">
                         <input
-                          ref={(el) =>
-                            (colorInputRefs.current[order.id] = el)
-                          }
+                          ref={(el) => (colorInputRefs.current[order.id] = el)}
                           type="text"
                           value={getColorName(order.paperColor)}
                           onChange={(e) => {
                             const value = e.target.value;
                             setColorSearch(value);
-                            setFilteredColors(fuzzySearch(value, PAPER_COLORS.map(c => c.name)));
+                            setFilteredColors(
+                              fuzzySearch(
+                                value,
+                                PAPER_COLORS.map((c) => c.name),
+                              ),
+                            );
                             // Try to match color immediately if exact match
-                            const exactMatch = PAPER_COLORS.find(c => 
-                              c.name.toLowerCase() === value.toLowerCase()
+                            const exactMatch = PAPER_COLORS.find(
+                              (c) =>
+                                c.name.toLowerCase() === value.toLowerCase(),
                             );
                             if (exactMatch) {
-                              updateOrder(order.id, "paperColor", exactMatch.code);
+                              updateOrder(
+                                order.id,
+                                "paperColor",
+                                exactMatch.code,
+                              );
                             }
                           }}
                           onFocus={(e) => {
                             setColorSearch(e.target.value);
                             setFilteredColors(
-                              fuzzySearch(e.target.value, PAPER_COLORS.map(c => c.name))
+                              fuzzySearch(
+                                e.target.value,
+                                PAPER_COLORS.map((c) => c.name),
+                              ),
                             );
                             setActiveColorIndex(index);
                           }}
@@ -598,14 +656,20 @@ function App() {
                           filteredColors.length > 0 && (
                             <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg">
                               {filteredColors.map((colorName) => {
-                                const color = PAPER_COLORS.find(c => c.name === colorName);
+                                const color = PAPER_COLORS.find(
+                                  (c) => c.name === colorName,
+                                );
                                 return (
                                   <button
                                     key={colorName}
                                     onMouseDown={(e) => {
                                       e.preventDefault();
                                       if (color) {
-                                        updateOrder(order.id, "paperColor", color.code);
+                                        updateOrder(
+                                          order.id,
+                                          "paperColor",
+                                          color.code,
+                                        );
                                       }
                                       setFilteredColors([]);
                                       setActiveColorIndex(-1);
@@ -613,7 +677,9 @@ function App() {
                                     className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.class} flex justify-between items-center`}
                                   >
                                     <span>{colorName}</span>
-                                    <span className="text-gray-500">£{color?.price}/sheet</span>
+                                    <span className="text-gray-500">
+                                      £{color?.price}/sheet
+                                    </span>
                                   </button>
                                 );
                               })}
@@ -758,16 +824,36 @@ function App() {
                 </tbody>
                 <tfoot className="bg-gray-50 border-t">
                   <tr>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Time</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Qty</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Lead</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Color</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Size</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Verse</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Occasion</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Price</th>
-                    <th className="px-2 py-1 text-center text-xs whitespace-nowrap">Avail</th>
-                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Status</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Time
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Qty
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Lead
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Color
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Size
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Verse
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Occasion
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Price
+                    </th>
+                    <th className="px-2 py-1 text-center text-xs whitespace-nowrap">
+                      Avail
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Status
+                    </th>
                   </tr>
                 </tfoot>
               </table>
@@ -953,10 +1039,16 @@ function App() {
           className="w-1 bg-gray-400 hover:bg-gray-500 cursor-col-resize transition-colors"
           onMouseDown={() => setIsDragging(true)}
         />
-        
+
         {/* Right Pane - Production Schedule */}
-        <div className="bg-gray-50 flex-1 relative" style={{ width: `${100 - leftPaneWidth}%` }}>
-          <div className="absolute top-0 left-0 right-0 p-2" style={{ position: 'sticky', top: 0 }}>
+        <div
+          className="bg-gray-50 flex-1 relative"
+          style={{ width: `${100 - leftPaneWidth}%` }}
+        >
+          <div
+            className="absolute top-0 left-0 right-0 p-2"
+            style={{ position: "sticky", top: 0 }}
+          >
             <div className="max-w-2xl mx-auto">
               <h2 className="text-base font-bold text-gray-800 mb-2">
                 Production Schedule
@@ -1052,7 +1144,9 @@ function App() {
                           <td className="px-1 py-0.5">
                             {trans.type === "paper" && trans.paperColor
                               ? `${trans.paperColor}:${trans.paperQuantity}`
-                              : "Cash"}
+                              : trans.affectsInventory
+                                ? "Inventory"
+                                : "Cash"}
                           </td>
                           <td className="px-1 py-0.5 text-xs">
                             {trans.reason || ""}
@@ -1079,6 +1173,14 @@ function App() {
                     className="flex-1 px-1 py-0.5 border rounded text-xs"
                     id="cashReason"
                   />
+                  <label className="flex items-center gap-1 text-xs">
+                    <input
+                      type="checkbox"
+                      id="affectsInventory"
+                      className="rounded"
+                    />
+                    <span>Inventory</span>
+                  </label>
                   <button
                     onClick={() => {
                       const amount = parseFloat(
@@ -1088,13 +1190,25 @@ function App() {
                           ) as HTMLInputElement
                         ).value,
                       );
-                      const reason = (
+                      const reason =
+                        (
+                          document.getElementById(
+                            "cashReason",
+                          ) as HTMLInputElement
+                        ).value || "Cash transaction";
+                      const affectsInventory = (
                         document.getElementById(
-                          "cashReason",
+                          "affectsInventory",
                         ) as HTMLInputElement
-                      ).value || "Cash transaction";
+                      ).checked;
                       if (amount) {
-                        addTransaction(amount, reason);
+                        addTransaction(
+                          amount,
+                          reason,
+                          undefined,
+                          undefined,
+                          affectsInventory,
+                        );
                         (
                           document.getElementById(
                             "cashAmount",
@@ -1105,6 +1219,11 @@ function App() {
                             "cashReason",
                           ) as HTMLInputElement
                         ).value = "";
+                        (
+                          document.getElementById(
+                            "affectsInventory",
+                          ) as HTMLInputElement
+                        ).checked = false;
                       }
                     }}
                     className="px-2 py-0.5 bg-blue-600 text-white rounded text-xs"
@@ -1120,12 +1239,28 @@ function App() {
                     className="w-16 px-1 py-0.5 border rounded text-xs"
                     id="paperQty"
                     onChange={() => {
-                      const qty = parseInt((document.getElementById('paperQty') as HTMLInputElement).value) || 0;
-                      const colorInput = (document.getElementById('paperColorInput') as HTMLInputElement);
+                      const qty =
+                        parseInt(
+                          (
+                            document.getElementById(
+                              "paperQty",
+                            ) as HTMLInputElement
+                          ).value,
+                        ) || 0;
+                      const colorInput = document.getElementById(
+                        "paperColorInput",
+                      ) as HTMLInputElement;
                       const colorName = colorInput?.value;
-                      const color = PAPER_COLORS.find(c => c.name.toLowerCase() === colorName?.toLowerCase());
+                      const color = PAPER_COLORS.find(
+                        (c) =>
+                          c.name.toLowerCase() === colorName?.toLowerCase(),
+                      );
                       if (color && qty > 0) {
-                        (document.getElementById('paperCost') as HTMLInputElement).value = (qty * color.price).toFixed(2);
+                        (
+                          document.getElementById(
+                            "paperCost",
+                          ) as HTMLInputElement
+                        ).value = (qty * color.price).toFixed(2);
                       }
                     }}
                   />
@@ -1137,15 +1272,28 @@ function App() {
                     list="paperColorsList"
                     onChange={(e) => {
                       const colorName = e.target.value;
-                      const color = PAPER_COLORS.find(c => c.name.toLowerCase() === colorName.toLowerCase());
-                      const qty = parseInt((document.getElementById('paperQty') as HTMLInputElement).value) || 0;
+                      const color = PAPER_COLORS.find(
+                        (c) => c.name.toLowerCase() === colorName.toLowerCase(),
+                      );
+                      const qty =
+                        parseInt(
+                          (
+                            document.getElementById(
+                              "paperQty",
+                            ) as HTMLInputElement
+                          ).value,
+                        ) || 0;
                       if (color && qty > 0) {
-                        (document.getElementById('paperCost') as HTMLInputElement).value = (qty * color.price).toFixed(2);
+                        (
+                          document.getElementById(
+                            "paperCost",
+                          ) as HTMLInputElement
+                        ).value = (qty * color.price).toFixed(2);
                       }
                     }}
                   />
                   <datalist id="paperColorsList">
-                    {PAPER_COLORS.map(color => (
+                    {PAPER_COLORS.map((color) => (
                       <option key={color.code} value={color.name} />
                     ))}
                   </datalist>
@@ -1177,36 +1325,35 @@ function App() {
                           "paperColorInput",
                         ) as HTMLInputElement
                       ).value;
-                      const colorMatch = PAPER_COLORS.find(c => 
-                        c.name.toLowerCase() === colorName.toLowerCase()
+                      const colorMatch = PAPER_COLORS.find(
+                        (c) => c.name.toLowerCase() === colorName.toLowerCase(),
                       );
-                      
+
                       if (!colorMatch) {
                         alert("Please select a valid color");
                         return;
                       }
-                      
+
                       if (!qty || qty <= 0) {
                         alert("Please enter a valid quantity");
                         return;
                       }
-                      
+
                       const cost = -Math.abs(qty * colorMatch.price);
-                      const reason = (
-                        document.getElementById(
-                          "paperReason",
-                        ) as HTMLInputElement
-                      ).value || `Bought ${qty} sheets of ${colorMatch.name}`;
-                      
+                      const reason =
+                        (
+                          document.getElementById(
+                            "paperReason",
+                          ) as HTMLInputElement
+                        ).value || `Bought ${qty} sheets of ${colorMatch.name}`;
+
                       // Allow buying even with negative cash
                       addTransaction(cost, reason, colorMatch.code, qty);
                       startCooldownTimer();
-                      
+
                       // Clear form
                       (
-                        document.getElementById(
-                          "paperQty",
-                        ) as HTMLInputElement
+                        document.getElementById("paperQty") as HTMLInputElement
                       ).value = "";
                       (
                         document.getElementById(
@@ -1214,9 +1361,7 @@ function App() {
                         ) as HTMLInputElement
                       ).value = "";
                       (
-                        document.getElementById(
-                          "paperCost",
-                        ) as HTMLInputElement
+                        document.getElementById("paperCost") as HTMLInputElement
                       ).value = "";
                       (
                         document.getElementById(
