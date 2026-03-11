@@ -1,6 +1,6 @@
 // Order calculation utilities for Production Game
 
-import type { Order, PaperInventory } from '../App';
+import type { Order, PaperInventory } from "../App";
 
 /**
  * Calculate the time required to complete a single order
@@ -10,9 +10,15 @@ import type { Order, PaperInventory } from '../App';
  */
 export function calculateOrderCompletionTime(
   order: Order,
-  workstationSpeed: number = 1.0
+  workstationSpeed: number = 1.0,
 ): number {
   // TODO: Implement calculation based on quantity, size, verse size, etc.
+  // Fetch the workstation speeds
+  // Find the one with the highest mean (not sure how to do this _perfectly_ yet, I think the one which causes the lowest expected value is what we want, SUGGEST VIA COMMENTS, DON'T CHANGE THE CODE WITHOUT A CHAT FIRST)
+  // Order completion time should be the sum of the following normal distributions:
+  // The bottleneck station distribution, or the worst case production line (as this is what will hold everything up)
+  // The throughput time (or the time it takes for one item to go through all the cells, which is NOT total time for a cell to do n items as that is different.)
+  // Bodge distribution, which we will implement (LATER) frontend parameters to add.
   return 0;
 }
 
@@ -24,7 +30,7 @@ export function calculateOrderCompletionTime(
  */
 export function calculateTotalProductionTime(
   orders: Order[],
-  workstationSpeed: number = 1.0
+  workstationSpeed: number = 1.0,
 ): number {
   // TODO: Sum up time for all orders, considering batching possibilities
   return 0;
@@ -38,7 +44,7 @@ export function calculateTotalProductionTime(
  */
 export function checkInventoryAvailability(
   order: Order,
-  inventory: PaperInventory
+  inventory: PaperInventory,
 ): boolean {
   // TODO: Check if we have enough paper of the right color
   return true;
@@ -62,7 +68,7 @@ export function calculatePaperNeeded(order: Order): number {
  */
 export function calculateOrderProfit(
   order: Order,
-  paperCostPerSheet: number = 0.1
+  paperCostPerSheet: number = 0.1,
 ): number {
   // TODO: Calculate revenue minus paper costs
   return 0;
@@ -76,7 +82,7 @@ export function calculateOrderProfit(
  */
 export function calculateRiskOfFailure(
   order: Order,
-  currentWorkload: number
+  currentWorkload: number,
 ): number {
   // TODO: Calculate based on lead time vs production time
   return 0;
@@ -90,7 +96,7 @@ export function calculateRiskOfFailure(
  */
 export function calculateTimeMargin(
   order: Order,
-  productionTime: number
+  productionTime: number,
 ): number {
   // TODO: Calculate lead time minus production time
   return 0;
@@ -126,8 +132,9 @@ export function calculateCostOfFailure(order: Order): number {
 export function calculateRewardRiskRatio(
   profit: number,
   riskPercentage: number,
-  costOfFailure: number
+  costOfFailure: number,
 ): number {
   // TODO: Calculate expected value considering risk
   return 0;
 }
+

@@ -9,11 +9,13 @@ type OrderStatus =
   | "WIP"
   | "sent"
   | "approved"
+  | "deleted"
   | "other";
 type PaperColor = "w" | "g" | "p" | "y" | "b" | "s" | string; //other colours must be addable
 
 interface Order {
   id: string;
+  orderTime: number; // timestamp when order was placed
   quantity: number;
   leadTime: number; // -1 means infinite
   paperColor: PaperColor;
@@ -39,7 +41,7 @@ interface Transaction {
   type: "cash" | "paper";
   paperColor?: string;
   paperQuantity?: number;
-  reason: string;
+  reason?: string;  // Optional reason
 }
 
 let OCCASIONS = [
@@ -67,13 +69,14 @@ let OCCASIONS = [
 
 function App() {
   // Resizable panes state
-  const [leftPaneWidth, setLeftPaneWidth] = useState(50); // percentage
+  const [leftPaneWidth, setLeftPaneWidth] = useState(70); // percentage
   const [isDragging, setIsDragging] = useState(false);
   const dividerRef = useRef<HTMLDivElement>(null);
 
   const [orders, setOrders] = useState<Order[]>([
     {
       id: "1",
+      orderTime: Date.now(),
       quantity: 12,
       leadTime: 15,
       paperColor: "w",
@@ -111,8 +114,8 @@ function App() {
     s: 0,
   });
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [cash, setCash] = useState(1000);
-  const [safetyStock, setSafetyStock] = useState(100);
+  const [cash, setCash] = useState(0);  // Game starts with no cash
+  const [safetyStock, setSafetyStock] = useState(12);
   const [buyingCooldown, setBuyingCooldown] = useState(0);
   const [cooldownTimer, setCooldownTimer] = useState<NodeJS.Timeout | null>(
     null,
@@ -140,14 +143,17 @@ function App() {
       });
   };
 
-  // Color definitions with fixed prices per sheet
+  // Fixed markdown for selling price (we lose money on excess stock)
+  const SELL_MARKDOWN = 0.7; // 30% loss when selling excess stock
+
+  // Color definitions with prices in pounds
   const PAPER_COLORS = [
-    { code: "w", name: "White", class: "bg-white", price: 0.10 },
-    { code: "g", name: "Green", class: "bg-green-100", price: 0.15 },
-    { code: "p", name: "Pink", class: "bg-pink-100", price: 0.15 },
-    { code: "y", name: "Yellow", class: "bg-yellow-100", price: 0.12 },
-    { code: "b", name: "Blue", class: "bg-blue-100", price: 0.18 },
-    { code: "s", name: "Salmon", class: "bg-orange-100", price: 0.20 },
+    { code: "w", name: "White", class: "bg-white", price: 10 },
+    { code: "g", name: "Green", class: "bg-green-100", price: 20 },
+    { code: "p", name: "Pink", class: "bg-pink-100", price: 20 },
+    { code: "y", name: "Yellow", class: "bg-yellow-100", price: 20 },
+    { code: "b", name: "Blue", class: "bg-blue-100", price: 20 },
+    { code: "s", name: "Salmon", class: "bg-orange-100", price: 20 },
   ];
 
   // Get color name from code
@@ -165,7 +171,7 @@ function App() {
   // Get color price from code
   const getColorPrice = (code: string) => {
     const color = PAPER_COLORS.find(c => c.code === code);
-    return color?.price || 0.10;
+    return color?.price || 10;
   };
 
   // Color mapping for paper colors
@@ -176,7 +182,10 @@ function App() {
 
   // Get row color based on availability and status
   const getRowColorClass = (order: Order) => {
-    if (!order.available || order.status === "cancelled") {
+    if (order.status === "deleted") {
+      return "opacity-30";
+    }
+    if (!order.available) {
       return "opacity-40";
     }
     if (order.status === "approved" || order.status === "sent") {
@@ -185,15 +194,25 @@ function App() {
     return "";
   };
 
+  // Format order time
+  const formatOrderTime = (timestamp: number) => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('en-GB', { 
+      hour: '2-digit', 
+      minute: '2-digit'
+    });
+  };
+
   // Status color coding
   const getStatusColor = (status: OrderStatus) => {
     const statusColors: { [key: string]: string } = {
-      cancelled: "text-red-600 bg-red-50",
+      passive: "text-gray-600 bg-gray-50",
       ordered: "text-blue-600 bg-blue-50",
       pending_inventory: "text-yellow-600 bg-yellow-50",
       WIP: "text-purple-600 bg-purple-50",
       sent: "text-green-600 bg-green-50",
       approved: "text-teal-600 bg-teal-50",
+      deleted: "text-red-600 line-through bg-red-50",
       other: "text-gray-600 bg-gray-50",
     };
     return statusColors[status];
@@ -203,6 +222,7 @@ function App() {
   const addOrder = () => {
     const newOrder: Order = {
       id: Date.now().toString(),
+      orderTime: Date.now(),
       quantity: 50,
       leadTime: 7,
       paperColor: "w",
@@ -211,9 +231,28 @@ function App() {
       occasion: "",
       price: 2.0,
       available: true,
-      status: "ordered",
+      status: "passive",
     };
     setOrders([...orders, newOrder]);
+  };
+
+  // Delete most recent passive order
+  const deleteRecentOrder = () => {
+    // Find the most recent (last in array) order with passive status
+    let recentPassiveIndex = -1;
+    for (let i = orders.length - 1; i >= 0; i--) {
+      if (orders[i].status === "passive") {
+        recentPassiveIndex = i;
+        break;
+      }
+    }
+    if (recentPassiveIndex !== -1) {
+      setOrders(
+        orders.map((order, index) =>
+          index === recentPassiveIndex ? { ...order, status: "deleted" as OrderStatus } : order
+        )
+      );
+    }
   };
 
   // Update order
@@ -280,10 +319,14 @@ function App() {
         e.preventDefault();
         addOrder();
       }
-      // Ctrl+Z: Undo
-      if (e.ctrlKey && e.key === "z" && showUndo) {
+      // Ctrl+Z: Delete newest passive order
+      if (e.ctrlKey && e.key === "z") {
         e.preventDefault();
-        undoLastAction();
+        if (showUndo) {
+          undoLastAction();
+        } else {
+          deleteRecentOrder();
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -310,7 +353,7 @@ function App() {
     },
   };
 
-  // Calculate financial metrics
+  // Calculate financial metrics - paper valued at cost (what we paid)
   const calculateNetWorth = () => {
     const paperValue = Object.entries(paperInventory).reduce(
       (total, [color, qty]) => {
@@ -322,7 +365,7 @@ function App() {
   };
 
   const calculateProfit = () => {
-    return calculateNetWorth() - 1000; // Starting capital was £1000
+    return calculateNetWorth(); // Game starts with £0
   };
 
   // Add new transaction
@@ -445,23 +488,6 @@ function App() {
               <h2 className="text-base font-bold text-gray-800">
                 Order Management
               </h2>
-              <div className="flex gap-2">
-                <button
-                  onClick={addOrder}
-                  className="px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium"
-                  title="Add Order (Ctrl+N)"
-                >
-                  + Add Order
-                </button>
-                <div className="text-xs text-gray-500 flex items-center gap-1">
-                  <span className="px-1 py-0.5 bg-gray-100 rounded text-xs">
-                    Ctrl+N: New
-                  </span>
-                  <span className="px-1 py-0.5 bg-gray-100 rounded text-xs">
-                    Ctrl+Z: Undo
-                  </span>
-                </div>
-              </div>
             </div>
 
             {/* Orders Table */}
@@ -469,6 +495,7 @@ function App() {
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 border-b">
                   <tr>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Time</th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Qty</th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Lead</th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Color</th>
@@ -486,6 +513,23 @@ function App() {
                       key={order.id}
                       className={`border-b hover:bg-gray-50 ${getRowColorClass(order)}`}
                     >
+                      <td className="px-2 py-1">
+                        <input
+                          type="text"
+                          value={formatOrderTime(order.orderTime)}
+                          onChange={(e) => {
+                            const timeStr = e.target.value;
+                            const [hours, minutes] = timeStr.split(':').map(Number);
+                            if (!isNaN(hours) && !isNaN(minutes)) {
+                              const newDate = new Date(order.orderTime);
+                              newDate.setHours(hours, minutes);
+                              updateOrder(order.id, "orderTime", newDate.getTime());
+                            }
+                          }}
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
+                          placeholder="HH:MM"
+                        />
+                      </td>
                       <td className="px-2 py-1">
                         <input
                           type="text"
@@ -569,7 +613,7 @@ function App() {
                                     className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.class} flex justify-between items-center`}
                                   >
                                     <span>{colorName}</span>
-                                    <span className="text-gray-500">£{color?.price.toFixed(2)}/sheet</span>
+                                    <span className="text-gray-500">£{color?.price}/sheet</span>
                                   </button>
                                 );
                               })}
@@ -705,13 +749,56 @@ function App() {
                           <option value="WIP">WIP</option>
                           <option value="sent">Sent</option>
                           <option value="approved">Approved</option>
+                          <option value="deleted">Deleted</option>
                           <option value="other">Other</option>
                         </select>
                       </td>
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="bg-gray-50 border-t">
+                  <tr>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Time</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Qty</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Lead</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Color</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Size</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Verse</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Occasion</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Price</th>
+                    <th className="px-2 py-1 text-center text-xs whitespace-nowrap">Avail</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Status</th>
+                  </tr>
+                </tfoot>
               </table>
+            </div>
+
+            {/* Action buttons below table */}
+            <div className="flex justify-between items-center mb-2 px-1">
+              <div className="flex gap-2">
+                <button
+                  onClick={addOrder}
+                  className="px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium"
+                  title="Add Order (Ctrl+N)"
+                >
+                  + Add Order
+                </button>
+                <button
+                  onClick={deleteRecentOrder}
+                  className="px-2 py-0.5 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium"
+                  title="Delete newest passive order (Ctrl+Z)"
+                >
+                  Delete New Order
+                </button>
+              </div>
+              <div className="text-xs text-gray-500 flex items-center gap-1">
+                <span className="px-1 py-0.5 bg-gray-100 rounded text-xs">
+                  Ctrl+N: New
+                </span>
+                <span className="px-1 py-0.5 bg-gray-100 rounded text-xs">
+                  Ctrl+Z: Delete New
+                </span>
+              </div>
             </div>
 
             {/* Suggested Orders Section */}
@@ -868,15 +955,17 @@ function App() {
         />
         
         {/* Right Pane - Production Schedule */}
-        <div className="bg-gray-50 p-2 flex-1" style={{ width: `${100 - leftPaneWidth}%` }}>
-          <div className="max-w-2xl mx-auto">
-            <h2 className="text-base font-bold text-gray-800 mb-2">
-              Production Schedule
-            </h2>
-            <div className="space-y-2">
-              {/* TODO: List of Undertaking orders will go here once object type is defined */}
-              <div className="bg-white rounded p-2 text-xs text-gray-600">
-                <p>Undertaking orders list will be implemented here...</p>
+        <div className="bg-gray-50 flex-1 relative" style={{ width: `${100 - leftPaneWidth}%` }}>
+          <div className="absolute top-0 left-0 right-0 p-2" style={{ position: 'sticky', top: 0 }}>
+            <div className="max-w-2xl mx-auto">
+              <h2 className="text-base font-bold text-gray-800 mb-2">
+                Production Schedule
+              </h2>
+              <div className="space-y-2">
+                {/* TODO: List of Undertaking orders will go here once object type is defined */}
+                <div className="bg-white rounded p-2 text-xs text-gray-600 shadow">
+                  <p>Undertaking orders list will be implemented here...</p>
+                </div>
               </div>
             </div>
           </div>
@@ -913,7 +1002,7 @@ function App() {
                             {getColorName(color)}
                           </span>
                           <span className="text-gray-500 text-xs">
-                            (£{getColorPrice(color).toFixed(2)})
+                            (£{getColorPrice(color)})
                           </span>
                         </div>
                       </td>
@@ -966,7 +1055,7 @@ function App() {
                               : "Cash"}
                           </td>
                           <td className="px-1 py-0.5 text-xs">
-                            {trans.reason}
+                            {trans.reason || ""}
                           </td>
                         </tr>
                       ))}
@@ -1003,8 +1092,8 @@ function App() {
                         document.getElementById(
                           "cashReason",
                         ) as HTMLInputElement
-                      ).value;
-                      if (amount && reason) {
+                      ).value || "Cash transaction";
+                      if (amount) {
                         addTransaction(amount, reason);
                         (
                           document.getElementById(
@@ -1027,49 +1116,55 @@ function App() {
                 <div className="flex gap-1">
                   <input
                     type="number"
-                    step="0.01"
-                    placeholder="Cost"
-                    className="w-16 px-1 py-0.5 border rounded text-xs"
-                    id="paperCost"
-                  />
-                  <select
-                    className="w-20 px-1 py-0.5 border rounded text-xs"
-                    id="paperColor"
-                  >
-                    {PAPER_COLORS.map(color => (
-                      <option key={color.code} value={color.code}>
-                        {color.name} (£{color.price.toFixed(2)})
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
                     placeholder="Qty"
-                    className="w-12 px-1 py-0.5 border rounded text-xs"
+                    className="w-16 px-1 py-0.5 border rounded text-xs"
                     id="paperQty"
+                    onChange={() => {
+                      const qty = parseInt((document.getElementById('paperQty') as HTMLInputElement).value) || 0;
+                      const colorInput = (document.getElementById('paperColorInput') as HTMLInputElement);
+                      const colorName = colorInput?.value;
+                      const color = PAPER_COLORS.find(c => c.name.toLowerCase() === colorName?.toLowerCase());
+                      if (color && qty > 0) {
+                        (document.getElementById('paperCost') as HTMLInputElement).value = (qty * color.price).toFixed(2);
+                      }
+                    }}
                   />
                   <input
                     type="text"
-                    placeholder="Reason"
+                    placeholder="Color"
+                    className="w-24 px-1 py-0.5 border rounded text-xs"
+                    id="paperColorInput"
+                    list="paperColorsList"
+                    onChange={(e) => {
+                      const colorName = e.target.value;
+                      const color = PAPER_COLORS.find(c => c.name.toLowerCase() === colorName.toLowerCase());
+                      const qty = parseInt((document.getElementById('paperQty') as HTMLInputElement).value) || 0;
+                      if (color && qty > 0) {
+                        (document.getElementById('paperCost') as HTMLInputElement).value = (qty * color.price).toFixed(2);
+                      }
+                    }}
+                  />
+                  <datalist id="paperColorsList">
+                    {PAPER_COLORS.map(color => (
+                      <option key={color.code} value={color.name} />
+                    ))}
+                  </datalist>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Cost"
+                    className="w-20 px-1 py-0.5 border rounded text-xs bg-gray-100"
+                    id="paperCost"
+                    readOnly
+                  />
+                  <input
+                    type="text"
+                    placeholder="Reason (optional)"
                     className="flex-1 px-1 py-0.5 border rounded text-xs"
                     id="paperReason"
                   />
                   <button
                     onClick={() => {
-                      const cost = -Math.abs(
-                        parseFloat(
-                          (
-                            document.getElementById(
-                              "paperCost",
-                            ) as HTMLInputElement
-                          ).value,
-                        ),
-                      );
-                      const color = (
-                        document.getElementById(
-                          "paperColor",
-                        ) as HTMLSelectElement
-                      ).value;
                       const qty = parseInt(
                         (
                           document.getElementById(
@@ -1077,30 +1172,57 @@ function App() {
                           ) as HTMLInputElement
                         ).value,
                       );
+                      const colorName = (
+                        document.getElementById(
+                          "paperColorInput",
+                        ) as HTMLInputElement
+                      ).value;
+                      const colorMatch = PAPER_COLORS.find(c => 
+                        c.name.toLowerCase() === colorName.toLowerCase()
+                      );
+                      
+                      if (!colorMatch) {
+                        alert("Please select a valid color");
+                        return;
+                      }
+                      
+                      if (!qty || qty <= 0) {
+                        alert("Please enter a valid quantity");
+                        return;
+                      }
+                      
+                      const cost = -Math.abs(qty * colorMatch.price);
                       const reason = (
                         document.getElementById(
                           "paperReason",
                         ) as HTMLInputElement
-                      ).value;
-                      if (cost && qty && reason) {
-                        addTransaction(cost, reason, color, qty);
-                        startCooldownTimer();
-                        (
-                          document.getElementById(
-                            "paperCost",
-                          ) as HTMLInputElement
-                        ).value = "";
-                        (
-                          document.getElementById(
-                            "paperQty",
-                          ) as HTMLInputElement
-                        ).value = "";
-                        (
-                          document.getElementById(
-                            "paperReason",
-                          ) as HTMLInputElement
-                        ).value = "";
-                      }
+                      ).value || `Bought ${qty} sheets of ${colorMatch.name}`;
+                      
+                      // Allow buying even with negative cash
+                      addTransaction(cost, reason, colorMatch.code, qty);
+                      startCooldownTimer();
+                      
+                      // Clear form
+                      (
+                        document.getElementById(
+                          "paperQty",
+                        ) as HTMLInputElement
+                      ).value = "";
+                      (
+                        document.getElementById(
+                          "paperColorInput",
+                        ) as HTMLInputElement
+                      ).value = "";
+                      (
+                        document.getElementById(
+                          "paperCost",
+                        ) as HTMLInputElement
+                      ).value = "";
+                      (
+                        document.getElementById(
+                          "paperReason",
+                        ) as HTMLInputElement
+                      ).value = "";
                     }}
                     className="px-2 py-0.5 bg-green-600 text-white rounded text-xs"
                   >
