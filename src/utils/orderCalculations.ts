@@ -1,6 +1,7 @@
 // Order calculation utilities for Production Game
 
-import type { Order, PaperInventory } from "../App";
+import type { Order } from "./orders";
+import type { PaperInventory } from "./assets";
 
 /**
  * Calculate the time required to complete a single order
@@ -66,75 +67,13 @@ export function calculatePaperNeeded(order: Order): number {
  * @param paperCostPerSheet - Cost per sheet of paper
  * @returns Profit in currency units
  */
-export function calculateOrderProfit(
+export function calculateOrderRevenue(
   order: Order,
   paperCostPerSheet: number = 0.1,
 ): number {
   // TODO: Calculate revenue minus paper costs
-  return 0;
-}
-
-/**
- * Estimate risk of failure for an order
- * @param order - Order to assess
- * @param currentWorkload - Current total workload in hours
- * @returns Risk percentage (0-100)
- */
-export function calculateRiskOfFailure(
-  order: Order,
-  currentWorkload: number,
-): number {
-  // TODO: Calculate based on lead time vs production time
-  return 0;
-}
-
-/**
- * Calculate time margin (buffer time) for an order
- * @param order - Order to check
- * @param productionTime - Estimated production time in hours
- * @returns Time margin in hours (can be negative if behind schedule)
- */
-export function calculateTimeMargin(
-  order: Order,
-  productionTime: number,
-): number {
-  // TODO: Calculate lead time minus production time
-  return 0;
-}
-
-/**
- * Determine optimal order sequence for production
- * @param orders - Array of orders to sequence
- * @returns Reordered array for optimal production
- */
-export function optimizeOrderSequence(orders: Order[]): Order[] {
-  // TODO: Sort by priority, deadline, paper color batching, etc.
-  return orders;
-}
-
-/**
- * Calculate cost of failure for an order
- * @param order - Order that might fail
- * @returns Cost in currency units
- */
-export function calculateCostOfFailure(order: Order): number {
-  // TODO: Calculate refund amount plus reputation cost
-  return 0;
-}
-
-/**
- * Calculate reward/risk ratio
- * @param profit - Expected profit
- * @param riskPercentage - Risk of failure (0-100)
- * @param costOfFailure - Cost if order fails
- * @returns Reward/risk ratio
- */
-export function calculateRewardRiskRatio(
-  profit: number,
-  riskPercentage: number,
-  costOfFailure: number,
-): number {
-  // TODO: Calculate expected value considering risk
+  // THIS NEEDS TO BE MINUS CURRENT PAPER WORTH, COLOURED PAPER GETS WORTH LESS PER OUR DEMAND THROUGHOUT THE GAME, I WILL IMPLEMENT THIS MYSELF DON'T DO FOR ME TODO
+  //TODO:
   return 0;
 }
 

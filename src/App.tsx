@@ -1,71 +1,38 @@
 import { useState, useEffect, useRef } from "react";
 import "./App.css";
-
-// Types
-type OrderStatus =
-  | "passive"
-  | "ordered"
-  | "pending_inventory"
-  | "WIP"
-  | "sent"
-  | "approved"
-  | "deleted"
-  | "other";
-type PaperColor = "w" | "g" | "p" | "y" | "b" | "s" | string; //other colours must be addable
-
-interface Order {
-  id: string;
-  orderTime: number; // timestamp when order was placed
-  quantity: number;
-  leadTime: number; // -1 means infinite
-  paperColor: PaperColor;
-  size: string; // A5, A6, A7
-  verseSize: number;
-  occasion: string;
-  price: number;
-  available: boolean;
-  status: OrderStatus;
-  startTime?: number;
-  dueTime?: number;
-}
-
-interface PaperInventory {
-  [color: string]: number;
-}
-
-interface Transaction {
-  id: string;
-  timestamp: Date;
-  amount: number; // positive for income, negative for expenses
-  type: "cash" | "paper";
-  paperColor?: string;
-  paperQuantity?: number;
-  reason?: string; // Optional reason
-  affectsInventory?: boolean; // For non-paper inventory purchases
-}
-
-let OCCASIONS = [
-  "Christmas",
-  "New Year",
-  "Wife's Birthday",
-  "Father's Birthday",
-  "Get Well Soon",
-  "Baby Girl",
-  "Baby Triplets",
-  "Good Luck",
-  "St David's Day",
-  "Mother's Day",
-  "Examination Pass",
-  "Marriage",
-  "Pregnancy",
-  "New Job",
-  "18 Birthday",
-  "Driving Test Pass",
-  "New Home",
-  "Passover",
-  "Easter",
-  "Silver Wedding",
-]; // Must have the ability to add new occasions
+import {
+  Order,
+  OrderStatus,
+  OCCASIONS,
+  addOrder as createNewOrder,
+  deleteRecentOrder as deleteRecentPassiveOrder,
+  updateOrder as updateOrderWithTransactions,
+} from "./utils/orders";
+import {
+  PaperInventory,
+  Transaction,
+  PAPER_COLORS,
+  SELL_MARKDOWN,
+  FAILURE_FINE_RATIO,
+  getColorName,
+  getColorCode,
+  getColorPrice,
+  calculateNetWorth,
+  calculateProfit,
+  addTransaction as createTransaction,
+} from "./utils/assets";
+import {
+  fuzzySearch,
+  getColorClass,
+  getRowColorClass,
+  formatOrderTime,
+  getStatusColor,
+  formatTime,
+  startCooldownTimer,
+  stopCooldownTimer,
+  resetCooldownTimer,
+  updateCooldownTime,
+} from "./utils/ui";
 
 function App() {
   // Resizable panes state
@@ -120,152 +87,30 @@ function App() {
   );
   const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
 
-  // Fuzzy search for occasions
-  const fuzzySearch = (query: string, items: string[]) => {
-    if (!query) return [];
-    const lowerQuery = query.toLowerCase();
-    return items
-      .filter((item) => {
-        const lowerItem = item.toLowerCase();
-        return (
-          lowerItem.includes(lowerQuery) ||
-          lowerQuery.split("").every((char) => lowerItem.includes(char))
-        );
-      })
-      .sort((a, b) => {
-        const aStart = a.toLowerCase().startsWith(lowerQuery);
-        const bStart = b.toLowerCase().startsWith(lowerQuery);
-        if (aStart && !bStart) return -1;
-        if (!aStart && bStart) return 1;
-        return 0;
-      });
-  };
-
-  // Fixed markdown for selling price (we lose money on excess stock)
-  const SELL_MARKDOWN = 0.7; // 30% loss when selling excess stock
-
-  // Color definitions with prices in pounds
-  const PAPER_COLORS = [
-    { code: "w", name: "White", class: "bg-white", price: 10 },
-    { code: "g", name: "Green", class: "bg-green-100", price: 20 },
-    { code: "p", name: "Pink", class: "bg-pink-100", price: 20 },
-    { code: "y", name: "Yellow", class: "bg-yellow-100", price: 20 },
-    { code: "b", name: "Blue", class: "bg-blue-100", price: 20 },
-    { code: "s", name: "Salmon", class: "bg-orange-100", price: 20 },
-  ];
-
-  // Get color name from code
-  const getColorName = (code: string) => {
-    const color = PAPER_COLORS.find((c) => c.code === code);
-    return color?.name || code;
-  };
-
-  // Get color code from name
-  const getColorCode = (name: string) => {
-    const color = PAPER_COLORS.find(
-      (c) => c.name.toLowerCase() === name.toLowerCase(),
-    );
-    return color?.code || name;
-  };
-
-  // Get color price from code
-  const getColorPrice = (code: string) => {
-    const color = PAPER_COLORS.find((c) => c.code === code);
-    return color?.price || 10;
-  };
-
-  // Color mapping for paper colors
-  const getColorClass = (color: PaperColor) => {
-    const colorDef = PAPER_COLORS.find(
-      (c) => c.code === color || c.name === color,
-    );
-    return colorDef?.class || "bg-gray-100";
-  };
-
-  // Get row color based on availability and status
-  const getRowColorClass = (order: Order) => {
-    if (order.status === "deleted") {
-      return "opacity-30";
-    }
-    if (!order.available) {
-      return "opacity-40";
-    }
-    if (order.status === "approved" || order.status === "sent") {
-      return "opacity-60";
-    }
-    return "";
-  };
-
-  // Format order time
-  const formatOrderTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  // Status color coding
-  const getStatusColor = (status: OrderStatus) => {
-    const statusColors: { [key: string]: string } = {
-      passive: "text-gray-600 bg-gray-50",
-      ordered: "text-blue-600 bg-blue-50",
-      pending_inventory: "text-yellow-600 bg-yellow-50",
-      WIP: "text-purple-600 bg-purple-50",
-      sent: "text-green-600 bg-green-50",
-      approved: "text-teal-600 bg-teal-50",
-      deleted: "text-red-600 line-through bg-red-50",
-      other: "text-gray-600 bg-gray-50",
-    };
-    return statusColors[status];
-  };
-
   // Add new order
   const addOrder = () => {
-    const newOrder: Order = {
-      id: Date.now().toString(),
-      orderTime: Date.now(),
-      quantity: 50,
-      leadTime: 7,
-      paperColor: "w",
-      size: "A5",
-      verseSize: 4,
-      occasion: "",
-      price: 2.0,
-      available: true,
-      status: "passive",
-    };
+    const newOrder = createNewOrder();
     setOrders([...orders, newOrder]);
   };
 
   // Delete most recent passive order
   const deleteRecentOrder = () => {
-    // Find the most recent (last in array) order with passive status
-    let recentPassiveIndex = -1;
-    for (let i = orders.length - 1; i >= 0; i--) {
-      if (orders[i].status === "passive") {
-        recentPassiveIndex = i;
-        break;
-      }
-    }
-    if (recentPassiveIndex !== -1) {
-      setOrders(
-        orders.map((order, index) =>
-          index === recentPassiveIndex
-            ? { ...order, status: "deleted" as OrderStatus }
-            : order,
-        ),
-      );
-    }
+    setOrders(deleteRecentPassiveOrder(orders));
   };
 
   // Update order
   const updateOrder = (id: string, field: keyof Order, value: any) => {
-    setOrders(
-      orders.map((order) =>
-        order.id === id ? { ...order, [field]: value } : order,
-      ),
+    const updatedOrders = updateOrderWithTransactions(
+      orders,
+      id,
+      field,
+      value,
+      transactions,
+      cash,
+      setTransactions,
+      setCash
     );
+    setOrders(updatedOrders);
   };
 
   // Accept suggestions
@@ -357,33 +202,6 @@ function App() {
     },
   };
 
-  // Calculate financial metrics - paper valued at cost (what we paid)
-  const calculateNetWorth = () => {
-    const paperValue = Object.entries(paperInventory).reduce(
-      (total, [color, qty]) => {
-        return total + qty * getColorPrice(color);
-      },
-      0,
-    );
-
-    // Add value of other inventory purchases (marked as affecting inventory)
-    const otherInventoryValue = transactions
-      .filter((t) => t.type === "cash" && t.affectsInventory && t.amount < 0)
-      .reduce((total, t) => total + Math.abs(t.amount), 0);
-
-    return cash + paperValue + otherInventoryValue;
-  };
-
-  // Calculate actual profit if we had to sell inventory at end-game markdown price
-  // Paper inventory is worth less when selling at game end (70% of purchase price)
-  // Cash remains at full value
-  const calculateProfit = () => {
-    const netWorth = calculateNetWorth();
-    const inventoryValue = netWorth - cash; // Total value in inventory
-    const finalSellValue = inventoryValue * SELL_MARKDOWN; // Inventory at final selling price
-    return cash + finalSellValue; // Cash + discounted inventory
-  };
-
   // Add new transaction
   const addTransaction = (
     amount: number,
@@ -391,17 +209,16 @@ function App() {
     paperColor?: string,
     paperQuantity?: number,
     affectsInventory?: boolean,
+    orderId?: string,
   ) => {
-    const newTransaction: Transaction = {
-      id: Date.now().toString(),
-      timestamp: new Date(),
+    const newTransaction = createTransaction(
       amount,
-      type: paperColor ? "paper" : "cash",
+      reason,
       paperColor,
       paperQuantity,
-      reason,
       affectsInventory,
-    };
+      orderId
+    );
 
     setTransactions([...transactions, newTransaction]);
     setCash((prev) => prev + amount);
@@ -413,50 +230,6 @@ function App() {
         [paperColor]: (prev[paperColor] || 0) + paperQuantity,
       }));
     }
-  };
-
-  // Timer management
-  const startCooldownTimer = () => {
-    if (cooldownTimer) clearInterval(cooldownTimer);
-    if (buyingCooldown === 0) setBuyingCooldown(300); // Default 5 minutes if starting from 0
-    const timer = setInterval(() => {
-      setBuyingCooldown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          setCooldownTimer(null);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    setCooldownTimer(timer);
-  };
-
-  const stopCooldownTimer = () => {
-    if (cooldownTimer) {
-      clearInterval(cooldownTimer);
-      setCooldownTimer(null);
-    }
-  };
-
-  const resetCooldownTimer = () => {
-    if (cooldownTimer) {
-      clearInterval(cooldownTimer);
-      setCooldownTimer(null);
-    }
-    setBuyingCooldown(300); // Reset to 5 minutes
-  };
-
-  const updateCooldownTime = (newTime: number) => {
-    if (!cooldownTimer && newTime >= 0) {
-      setBuyingCooldown(newTime);
-    }
-  };
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   return (
@@ -474,15 +247,15 @@ function App() {
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400">Net Worth:</span>
               <span className="text-sm font-bold text-blue-400">
-                £{calculateNetWorth().toFixed(2)}
+                £{calculateNetWorth(cash, paperInventory, transactions).toFixed(2)}
               </span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400">Profit:</span>
               <span
-                className={`text-sm font-bold ${calculateProfit() >= 0 ? "text-green-400" : "text-red-400"}`}
+                className={`text-sm font-bold ${calculateProfit(cash, paperInventory, transactions) >= 0 ? "text-green-400" : "text-red-400"}`}
               >
-                £{calculateProfit().toFixed(2)}
+                £{calculateProfit(cash, paperInventory, transactions).toFixed(2)}
               </span>
             </div>
           </div>
@@ -815,6 +588,7 @@ function App() {
                           <option value="WIP">WIP</option>
                           <option value="sent">Sent</option>
                           <option value="approved">Approved</option>
+                          <option value="failed">Failed</option>
                           <option value="deleted">Deleted</option>
                           <option value="other">Other</option>
                         </select>
@@ -1349,7 +1123,7 @@ function App() {
 
                       // Allow buying even with negative cash
                       addTransaction(cost, reason, colorMatch.code, qty);
-                      startCooldownTimer();
+                      startCooldownTimer(cooldownTimer, buyingCooldown, setBuyingCooldown, setCooldownTimer);
 
                       // Clear form
                       (
@@ -1385,9 +1159,9 @@ function App() {
                     <button
                       onClick={() => {
                         if (cooldownTimer) {
-                          stopCooldownTimer();
+                          stopCooldownTimer(cooldownTimer, setCooldownTimer);
                         } else {
-                          startCooldownTimer();
+                          startCooldownTimer(cooldownTimer, buyingCooldown, setBuyingCooldown, setCooldownTimer);
                         }
                       }}
                       className={`px-2 py-0.5 rounded text-xs font-medium ${
@@ -1399,7 +1173,7 @@ function App() {
                       {cooldownTimer ? "Stop" : "Start"}
                     </button>
                     <button
-                      onClick={resetCooldownTimer}
+                      onClick={() => resetCooldownTimer(cooldownTimer, setCooldownTimer, setBuyingCooldown)}
                       className="px-2 py-0.5 bg-gray-500 hover:bg-gray-600 text-white rounded text-xs"
                     >
                       Reset
@@ -1413,7 +1187,7 @@ function App() {
                           if (parts.length === 2) {
                             const mins = parseInt(parts[0]) || 0;
                             const secs = parseInt(parts[1]) || 0;
-                            updateCooldownTime(mins * 60 + secs);
+                            updateCooldownTime(mins * 60 + secs, cooldownTimer, setBuyingCooldown);
                           }
                         }}
                         className="w-12 px-1 py-0.5 border rounded text-xs font-mono text-center"

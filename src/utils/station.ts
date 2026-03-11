@@ -1,6 +1,6 @@
 // Production station definitions and utilities
 
-import type { Order } from "../App";
+import type { Order } from "./orders";
 
 // Normal distribution type for statistical calculations
 export interface NormalDistribution {
@@ -9,7 +9,7 @@ export interface NormalDistribution {
   // variance?: number; should be a function, otherwise it might unsync...
 }
 
-export interface RawStationTaskTimes {
+export interface RawStationTaskTime {
   timeTaken: number;
   numberOfItems: number; // if many are done at once we need to know this as it'll need to be weighted differently when merging distributuions
   employeeLockedInNess: number;
@@ -20,27 +20,16 @@ export interface RawStationTaskTimes {
 export interface Station {
   id: string;
   name: string;
-  type: StationType;
   // Processing time parameters (in SECONDS per unit)
-  meanProcessingTime: number;
-  stdDevProcessingTime: number;
+  rawStationTaskTimes: RawStationTaskTime[]; //Is this how we do a varying list length in typescript?
+  itemProcesingTime: NormalDistribution;
   // Capacity and constraints
   batchCapacity: number; // Max units that can be processed simultaneously
   setupTime: number; // Fixed setup time in SECONDS (probably redundant)
   // Current state
-  isActive: boolean;
+  itemsLeftToProcessUntilIdle: number; //Estimate of course...
   speedMultiplier: number; // Speed override factor (default 1.0)
 }
-
-//Likely just grouped numerically
-export type StationType =
-  | "cutting"
-  | "folding"
-  | "printing"
-  | "assembly"
-  | "packaging"
-  | "quality_control"
-  | "other";
 
 // Station configuration for different product sizes, based on the station this will vary.
 // Paper will have sizes 1,2,3 based on fold count.
@@ -67,16 +56,9 @@ export class StationManager {
     // TODO: Add your default station configurations here
     // Example (times in SECONDS):
     // this.stations.set("cutting", {
-    //   id: "cutting",
-    //   name: "Cutting Station",
-    //   type: "cutting",
-    //   meanProcessingTime: 120,  // 2 minutes per unit
-    //   stdDevProcessingTime: 30, // 30 seconds std dev
-    //   batchCapacity: 10,
-    //   setupTime: 300,  // 5 minutes setup
-    //   isActive: true,
-    //   speedMultiplier: 1.0
+    // PUT IN DEFAULT VALUES FOR EACH STATION
     // });
+    // can we populate these stations...
   }
 
   getStation(id: string): Station | undefined {
