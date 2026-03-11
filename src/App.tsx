@@ -3,14 +3,14 @@ import "./App.css";
 
 // Types
 type OrderStatus =
-  | "cancelled"
+  | "passive"
   | "ordered"
   | "pending_inventory"
   | "WIP"
   | "sent"
   | "approved"
   | "other";
-type PaperColor = "w" | "g" | "p" | "y" | "b" | "s" | string;
+type PaperColor = "w" | "g" | "p" | "y" | "b" | "s" | string; //other colours must be addable
 
 interface Order {
   id: string;
@@ -23,11 +23,10 @@ interface Order {
   price: number;
   available: boolean;
   status: OrderStatus;
+  startTime?: number;
+  dueTime?: number;
 }
 
-interface SuggestedOrder extends Order {
-  confidence: number;
-}
 
 interface PaperInventory {
   [color: string]: number;
@@ -43,47 +42,50 @@ interface Transaction {
   reason: string;
 }
 
-// Sample occasions for autocomplete
-const OCCASIONS = [
-  "Birthday",
-  "Wedding",
-  "Anniversary",
+let OCCASIONS = [
   "Christmas",
-  "Valentine's Day",
-  "Mother's Day",
-  "Father's Day",
-  "Easter",
-  "Graduation",
-  "New Baby",
-  "Get Well Soon",
-  "Thank You",
-  "Congratulations",
-  "Sympathy",
-  "Retirement",
-  "Hanukkah",
-  "Diwali",
-  "Eid",
   "New Year",
-  "Halloween",
-];
+  "Wife's Birthday",
+  "Father's Birthday",
+  "Get Well Soon",
+  "Baby Girl",
+  "Baby Triplets",
+  "Good Luck",
+  "St David's Day",
+  "Mother's Day",
+  "Examination Pass",
+  "Marriage",
+  "Pregnancy",
+  "New Job",
+  "18 Birthday",
+  "Driving Test Pass",
+  "New Home",
+  "Passover",
+  "Easter",
+  "Silver Wedding",
+]; // Must have the ability to add new occasions
 
 function App() {
+  // Resizable panes state
+  const [leftPaneWidth, setLeftPaneWidth] = useState(50); // percentage
+  const [isDragging, setIsDragging] = useState(false);
+  const dividerRef = useRef<HTMLDivElement>(null);
+
   const [orders, setOrders] = useState<Order[]>([
     {
       id: "1",
-      quantity: 100,
-      leadTime: 7,
+      quantity: 12,
+      leadTime: 15,
       paperColor: "w",
       size: "A5",
       verseSize: 4,
       occasion: "Birthday",
-      price: 2.5,
+      price: 0,
       available: true,
-      status: "WIP",
+      status: "passive",
     },
-  ]);
+  ]); //can someone update this comment to tell me if we need to pre-populate these values, I'd much rather leave some of them blank.
 
-  const [suggestedOrders, setSuggestedOrders] = useState<SuggestedOrder[]>([]);
   const [showUndo, setShowUndo] = useState(false);
   const [previousOrders, setPreviousOrders] = useState<Order[]>([]);
   const [occasionSearch, setOccasionSearch] = useState("");
@@ -92,15 +94,21 @@ function App() {
   const occasionInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
     {},
   );
+  const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
+    {},
+  );
+  const [activeColorIndex, setActiveColorIndex] = useState(-1);
+  const [colorSearch, setColorSearch] = useState("");
+  const [filteredColors, setFilteredColors] = useState<string[]>([]);
 
-  // Inventory Management State
+  // Inventory Management State - the game starts with nothing, then we will manually buy
   const [paperInventory, setPaperInventory] = useState<PaperInventory>({
-    w: 500,
-    g: 200,
-    p: 150,
-    y: 100,
-    b: 250,
-    s: 75,
+    w: 0,
+    g: 0,
+    p: 0,
+    y: 0,
+    b: 0,
+    s: 0,
   });
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [cash, setCash] = useState(1000);
@@ -132,17 +140,38 @@ function App() {
       });
   };
 
+  // Color definitions with fixed prices per sheet
+  const PAPER_COLORS = [
+    { code: "w", name: "White", class: "bg-white", price: 0.10 },
+    { code: "g", name: "Green", class: "bg-green-100", price: 0.15 },
+    { code: "p", name: "Pink", class: "bg-pink-100", price: 0.15 },
+    { code: "y", name: "Yellow", class: "bg-yellow-100", price: 0.12 },
+    { code: "b", name: "Blue", class: "bg-blue-100", price: 0.18 },
+    { code: "s", name: "Salmon", class: "bg-orange-100", price: 0.20 },
+  ];
+
+  // Get color name from code
+  const getColorName = (code: string) => {
+    const color = PAPER_COLORS.find(c => c.code === code);
+    return color?.name || code;
+  };
+
+  // Get color code from name
+  const getColorCode = (name: string) => {
+    const color = PAPER_COLORS.find(c => c.name.toLowerCase() === name.toLowerCase());
+    return color?.code || name;
+  };
+
+  // Get color price from code
+  const getColorPrice = (code: string) => {
+    const color = PAPER_COLORS.find(c => c.code === code);
+    return color?.price || 0.10;
+  };
+
   // Color mapping for paper colors
   const getColorClass = (color: PaperColor) => {
-    const colorMap: { [key: string]: string } = {
-      w: "bg-white",
-      g: "bg-green-100",
-      p: "bg-pink-100",
-      y: "bg-yellow-100",
-      b: "bg-blue-100",
-      s: "bg-orange-100",
-    };
-    return colorMap[color] || "bg-gray-100";
+    const colorDef = PAPER_COLORS.find(c => c.code === color || c.name === color);
+    return colorDef?.class || "bg-gray-100";
   };
 
   // Get row color based on availability and status
@@ -214,6 +243,35 @@ function App() {
     }
   };
 
+  // Handle pane resizing
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      const newWidth = (e.clientX / window.innerWidth) * 100;
+      if (newWidth >= 20 && newWidth <= 80) {
+        setLeftPaneWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isDragging]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -256,7 +314,7 @@ function App() {
   const calculateNetWorth = () => {
     const paperValue = Object.entries(paperInventory).reduce(
       (total, [color, qty]) => {
-        return total + qty * 0.1; // Assuming £0.10 per sheet
+        return total + qty * getColorPrice(color);
       },
       0,
     );
@@ -379,9 +437,9 @@ function App() {
       </div>
 
       {/* Two-pane section */}
-      <div className="flex">
+      <div className="flex relative">
         {/* Left Pane - Order Management */}
-        <div className="w-1/2 bg-white border-r border-gray-300">
+        <div className="bg-white border-r border-gray-300" style={{ width: `${leftPaneWidth}%` }}>
           <div className="p-2">
             <div className="flex justify-between items-center mb-1">
               <h2 className="text-base font-bold text-gray-800">
@@ -407,19 +465,19 @@ function App() {
             </div>
 
             {/* Orders Table */}
-            <div className="mb-2">
+            <div className="mb-2 overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 border-b">
                   <tr>
-                    <th className="px-1 py-0.5 text-left text-xs">Qty</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Lead</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Color</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Size</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Verse</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Occasion</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Price</th>
-                    <th className="px-1 py-0.5 text-center text-xs">Avail</th>
-                    <th className="px-1 py-0.5 text-left text-xs">Status</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Qty</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Lead</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Color</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Size</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Verse</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Occasion</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Price</th>
+                    <th className="px-2 py-1 text-center text-xs whitespace-nowrap">Avail</th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -428,72 +486,119 @@ function App() {
                       key={order.id}
                       className={`border-b hover:bg-gray-50 ${getRowColorClass(order)}`}
                     >
-                      <td className="px-1 py-0.5">
+                      <td className="px-2 py-1">
                         <input
-                          type="number"
+                          type="text"
                           value={order.quantity}
                           onChange={(e) =>
                             updateOrder(
                               order.id,
                               "quantity",
-                              parseInt(e.target.value),
+                              parseInt(e.target.value) || 0,
                             )
                           }
-                          className="w-10 px-0.5 py-0.5 border rounded text-xs"
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
                         />
                       </td>
-                      <td className="px-1 py-0.5">
+                      <td className="px-2 py-1">
                         <input
-                          type="number"
+                          type="text"
                           value={order.leadTime}
                           onChange={(e) =>
                             updateOrder(
                               order.id,
                               "leadTime",
-                              parseInt(e.target.value),
+                              parseInt(e.target.value) || -1,
                             )
                           }
-                          className="w-8 px-0.5 py-0.5 border rounded text-xs"
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="∞"
                         />
                       </td>
-                      <td className="px-1 py-0.5">
+                      <td className="px-2 py-1 relative">
+                        <input
+                          ref={(el) =>
+                            (colorInputRefs.current[order.id] = el)
+                          }
+                          type="text"
+                          value={getColorName(order.paperColor)}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setColorSearch(value);
+                            setFilteredColors(fuzzySearch(value, PAPER_COLORS.map(c => c.name)));
+                            // Try to match color immediately if exact match
+                            const exactMatch = PAPER_COLORS.find(c => 
+                              c.name.toLowerCase() === value.toLowerCase()
+                            );
+                            if (exactMatch) {
+                              updateOrder(order.id, "paperColor", exactMatch.code);
+                            }
+                          }}
+                          onFocus={(e) => {
+                            setColorSearch(e.target.value);
+                            setFilteredColors(
+                              fuzzySearch(e.target.value, PAPER_COLORS.map(c => c.name))
+                            );
+                            setActiveColorIndex(index);
+                          }}
+                          onBlur={() => {
+                            setTimeout(() => {
+                              setActiveColorIndex(-1);
+                              setFilteredColors([]);
+                            }, 200);
+                          }}
+                          className={`w-full px-1 py-1.5 border rounded text-xs h-8 ${getColorClass(order.paperColor)}`}
+                          placeholder="Color..."
+                        />
+                        {activeColorIndex === index &&
+                          filteredColors.length > 0 && (
+                            <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg">
+                              {filteredColors.map((colorName) => {
+                                const color = PAPER_COLORS.find(c => c.name === colorName);
+                                return (
+                                  <button
+                                    key={colorName}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      if (color) {
+                                        updateOrder(order.id, "paperColor", color.code);
+                                      }
+                                      setFilteredColors([]);
+                                      setActiveColorIndex(-1);
+                                    }}
+                                    className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.class} flex justify-between items-center`}
+                                  >
+                                    <span>{colorName}</span>
+                                    <span className="text-gray-500">£{color?.price.toFixed(2)}/sheet</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                      </td>
+                      <td className="px-2 py-1">
                         <input
                           type="text"
-                          value={order.paperColor}
-                          onChange={(e) =>
-                            updateOrder(order.id, "paperColor", e.target.value)
-                          }
-                          className={`w-6 px-0.5 py-0.5 border rounded text-xs ${getColorClass(order.paperColor)}`}
-                          maxLength={1}
-                          title="w=white, g=green, p=pink, y=yellow, b=blue, s=salmon"
-                        />
-                      </td>
-                      <td className="px-1 py-0.5">
-                        <select
                           value={order.size}
                           onChange={(e) =>
                             updateOrder(order.id, "size", e.target.value)
                           }
-                          className="w-10 px-0.5 py-0.5 border rounded text-gray-600 text-xs"
-                        >
-                          <option value="A5">A5</option>
-                          <option value="A6">A6</option>
-                          <option value="A7">A7</option>
-                        </select>
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
+                          placeholder="Size"
+                        />
                       </td>
-                      <td className="px-1 py-0.5">
+                      <td className="px-2 py-1">
                         <input
-                          type="number"
+                          type="text"
                           value={order.verseSize}
                           onChange={(e) =>
                             updateOrder(
                               order.id,
                               "verseSize",
-                              parseInt(e.target.value),
+                              parseInt(e.target.value) || 0,
                             )
                           }
-                          className="w-8 px-0.5 py-0.5 border rounded text-xs"
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
                         />
                       </td>
                       <td className="px-2 py-1 relative">
@@ -525,12 +630,12 @@ function App() {
                               setFilteredOccasions([]);
                             }, 200);
                           }}
-                          className="w-16 px-0.5 py-0.5 border rounded text-xs"
-                          placeholder="Type..."
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
+                          placeholder="Occasion..."
                         />
                         {activeOccasionIndex === index &&
                           filteredOccasions.length > 0 && (
-                            <div className="absolute z-50 top-full left-0 w-24 bg-white border rounded shadow-lg">
+                            <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg max-h-32 overflow-y-auto">
                               {filteredOccasions.map((occasion) => (
                                 <button
                                   key={occasion}
@@ -548,21 +653,20 @@ function App() {
                             </div>
                           )}
                       </td>
-                      <td className="px-1 py-0.5">
+                      <td className="px-2 py-1">
                         <div className="flex items-center">
                           <span className="mr-0.5 text-gray-500">£</span>
                           <input
-                            type="number"
-                            step="0.01"
+                            type="text"
                             value={order.price}
                             onChange={(e) =>
                               updateOrder(
                                 order.id,
                                 "price",
-                                parseFloat(e.target.value),
+                                parseFloat(e.target.value) || 0,
                               )
                             }
-                            className="w-10 px-0.5 py-0.5 border rounded text-xs"
+                            className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           />
                         </div>
                       </td>
@@ -583,7 +687,7 @@ function App() {
                           <div className="w-6 h-3 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:rounded-full after:h-2 after:w-2.5 after:transition-all peer-checked:bg-green-600"></div>
                         </label>
                       </td>
-                      <td className="px-1 py-0.5">
+                      <td className="px-2 py-1">
                         <select
                           value={order.status}
                           onChange={(e) =>
@@ -593,9 +697,9 @@ function App() {
                               e.target.value as OrderStatus,
                             )
                           }
-                          className={`w-14 px-0.5 py-0.5 rounded text-xs font-medium ${getStatusColor(order.status)}`}
+                          className={`w-full px-1 py-1.5 rounded text-xs font-medium h-8 ${getStatusColor(order.status)}`}
                         >
-                          <option value="cancelled">Cancel</option>
+                          <option value="passive">Passive</option>
                           <option value="ordered">Ordered</option>
                           <option value="pending_inventory">Pending</option>
                           <option value="WIP">WIP</option>
@@ -756,8 +860,15 @@ function App() {
             </div>
           </div>
         </div>
+        {/* Draggable Divider */}
+        <div
+          ref={dividerRef}
+          className="w-1 bg-gray-400 hover:bg-gray-500 cursor-col-resize transition-colors"
+          onMouseDown={() => setIsDragging(true)}
+        />
+        
         {/* Right Pane - Production Schedule */}
-        <div className="w-1/2 bg-gray-50 p-2">
+        <div className="bg-gray-50 p-2 flex-1" style={{ width: `${100 - leftPaneWidth}%` }}>
           <div className="max-w-2xl mx-auto">
             <h2 className="text-base font-bold text-gray-800 mb-2">
               Production Schedule
@@ -799,19 +910,10 @@ function App() {
                             className={`w-3 h-3 rounded ${getColorClass(color)}`}
                           />
                           <span className="font-medium">
-                            {color === "w"
-                              ? "White"
-                              : color === "g"
-                                ? "Green"
-                                : color === "p"
-                                  ? "Pink"
-                                  : color === "y"
-                                    ? "Yellow"
-                                    : color === "b"
-                                      ? "Blue"
-                                      : color === "s"
-                                        ? "Salmon"
-                                        : color}
+                            {getColorName(color)}
+                          </span>
+                          <span className="text-gray-500 text-xs">
+                            (£{getColorPrice(color).toFixed(2)})
                           </span>
                         </div>
                       </td>
@@ -931,15 +1033,14 @@ function App() {
                     id="paperCost"
                   />
                   <select
-                    className="w-12 px-1 py-0.5 border rounded text-xs"
+                    className="w-20 px-1 py-0.5 border rounded text-xs"
                     id="paperColor"
                   >
-                    <option value="w">W</option>
-                    <option value="g">G</option>
-                    <option value="p">P</option>
-                    <option value="y">Y</option>
-                    <option value="b">B</option>
-                    <option value="s">S</option>
+                    {PAPER_COLORS.map(color => (
+                      <option key={color.code} value={color.code}>
+                        {color.name} (£{color.price.toFixed(2)})
+                      </option>
+                    ))}
                   </select>
                   <input
                     type="number"
