@@ -74,6 +74,28 @@ export type OrderStatus =
   | "deleted"
   | "other";
 
+export type StationNumber = 1 | 2 | 3;
+export type OrderStationKey = "station1" | "station2" | "station3";
+
+export interface StationTaskState {
+  startedAt?: number;
+  activeSince?: number;
+  accumulatedActiveMs?: number;
+  isPaused?: boolean;
+  pausedAt?: number;
+  completedAt?: number;
+  performanceRating?: number;
+  recordedAt?: number;
+  recordedBatchTimeMs?: number;
+  recordedQuantity?: number;
+}
+
+export interface OrderStationTasks {
+  station1?: StationTaskState;
+  station2?: StationTaskState;
+  station3?: StationTaskState;
+}
+
 export interface Order {
   id: string;
   orderTime: number; // timestamp when order was placed
@@ -90,6 +112,7 @@ export interface Order {
   startTime?: number;
   dueTime?: number;
   selectedVerse?: string; // The actual verse text selected for this order (TODO)
+  stationTasks?: OrderStationTasks;
 }
 
 // Game parameters that affect gameplay

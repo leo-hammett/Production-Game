@@ -26,6 +26,7 @@ import { STANDARD_TIME_RATIO } from "../utils/gameConstants";
 // Fast operation - worker completes folding then helps Station 2
 const station1FoldingRawTimes: RawStationTaskTime[] = [
   // A5 folding (1 fold - simplest)
+  // TODO: BE AWARE FOLD A5 preceeds A6, so T A6 = TA5 + TA4
   {
     observedTimeTaken: 6.98,
     numberOfItems: 1,
@@ -90,6 +91,7 @@ const station1FoldingRawTimes: RawStationTaskTime[] = [
   },
 
   // A7 folding (3 folds - most complex)
+
   {
     observedTimeTaken: 8.03,
     numberOfItems: 1,
@@ -290,4 +292,3 @@ export function createDefaultStations(): Station[] {
  * - For now, the effective processing time abstraction provides good enough estimates
  *   while keeping the code simple and maintainable.
  */
-

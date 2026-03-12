@@ -58,6 +58,7 @@ export interface SerializableOrder {
   startTime?: number;
   dueTime?: number;
   selectedVerse?: string;
+  stationTasks?: Order["stationTasks"];
 }
 
 export interface SerializableTransaction {
@@ -247,6 +248,7 @@ function serializeOrder(order: Order): SerializableOrder {
     startTime: order.startTime,
     dueTime: order.dueTime,
     selectedVerse: order.selectedVerse,
+    stationTasks: order.stationTasks,
   };
 }
 
@@ -275,6 +277,7 @@ function deserializeOrder(
     startTime: order.startTime,
     dueTime: order.dueTime,
     selectedVerse: order.selectedVerse,
+    stationTasks: order.stationTasks,
   };
 }
 

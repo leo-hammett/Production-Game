@@ -9,6 +9,12 @@ interface Order {
   verseSize: number;
 }
 
+export const STATION_IDS = {
+  1: "station1_folding",
+  2: "station2_stencilling",
+  3: "station3_writing",
+} as const;
+
 // Normal distribution type for statistical calculations
 export interface NormalDistribution {
   mean: number;
@@ -89,24 +95,41 @@ export function generateStationProcessingTimes(
   for (const [size, times] of timesBySize) {
     if (times.length === 0) continue;
 
-    // Normalize times to per-item basis accounting for employee performance
+    // Normalize times to per-item basis accounting for employee performance.
+    // Batch recordings are averages over multiple items, so weight them by
+    // `numberOfItems` when reconstructing the single-item distribution.
     const normalizedTimes = times.map((t) => {
       // Adjust for employee performance (they're faster during timing)
       const adjustedTime = t.observedTimeTaken / t.employeePerformance;
       // Convert to per-item time
       const perItemTime = adjustedTime / t.numberOfItems;
       // Apply standard time ratio from game state
-      return perItemTime * standardTimeRatio;
+      return {
+        perItemTime: perItemTime * standardTimeRatio,
+        weight: Math.max(t.numberOfItems, 1),
+      };
     });
 
-    // Calculate mean
-    const mean =
-      normalizedTimes.reduce((sum, t) => sum + t, 0) / normalizedTimes.length;
+    const totalWeight = normalizedTimes.reduce(
+      (sum, sample) => sum + sample.weight,
+      0,
+    );
 
-    // Calculate standard deviation
+    // Calculate weighted mean
+    const mean =
+      normalizedTimes.reduce(
+        (sum, sample) => sum + sample.perItemTime * sample.weight,
+        0,
+      ) / totalWeight;
+
+    // Convert batch-average variance back toward a one-item variance estimate by
+    // weighting each observation by its batch size.
     const variance =
-      normalizedTimes.reduce((sum, t) => sum + Math.pow(t - mean, 2), 0) /
-      normalizedTimes.length;
+      normalizedTimes.reduce(
+        (sum, sample) =>
+          sum + sample.weight * Math.pow(sample.perItemTime - mean, 2),
+        0,
+      ) / totalWeight;
     const stdDev = Math.sqrt(variance);
 
     distributions.set(size, {
@@ -218,23 +241,7 @@ export function calculateStationItemTimeDistribution(
   order: Order,
 ): NormalDistribution {
   // Determine the task size based on order properties and station type
-  let taskSize: number;
-
-  // Different stations care about different sizes
-  if (station.id.includes("verse") || station.id.includes("writing")) {
-    taskSize = order.verseSize; // 2, 4, or 6 lines
-  } else if (station.id.includes("fold") || station.id.includes("cut")) {
-    // Map paper sizes to complexity/fold counts
-    const sizeMap: { [key: string]: number } = {
-      A5: 1,
-      A6: 2,
-      A7: 3,
-    };
-    taskSize = sizeMap[order.size] || 1;
-  } else {
-    // Default task size
-    taskSize = 1;
-  }
+  const taskSize = getStationTaskSize(station.id, order);
 
   // Get the distribution for this task size
   let distribution: NormalDistribution;
@@ -250,6 +257,26 @@ export function calculateStationItemTimeDistribution(
     mean: distribution.mean / station.speedMultiplier,
     stdDev: distribution.stdDev / station.speedMultiplier,
   };
+}
+
+export function getStationTaskSize(
+  stationId: string,
+  order: Pick<Order, "size" | "verseSize">,
+): number {
+  if (stationId.includes("verse") || stationId.includes("writing")) {
+    return order.verseSize;
+  }
+
+  if (stationId.includes("fold") || stationId.includes("cut")) {
+    const sizeMap: Record<string, number> = {
+      A5: 1,
+      A6: 2,
+      A7: 3,
+    };
+    return sizeMap[order.size] || 1;
+  }
+
+  return 1;
 }
 
 // Calculate handover time between stations

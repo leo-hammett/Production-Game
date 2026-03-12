@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import type { Order } from "../utils/gameState";
+import type { Order, StationNumber } from "../utils/gameState";
 import {
   getScheduledProductionOrders,
   reorderScheduleOrderIds,
 } from "../utils/orders";
+import type { StationProjectionMatrix } from "../utils/stationProgress";
 
 interface ProductionScheduleProps {
   orders: Order[];
@@ -14,6 +15,8 @@ interface ProductionScheduleProps {
   isStationMode?: boolean;
   onOrderClick?: (orderId: string) => void;
   currentOrderId?: string | null;
+  stationNumber?: StationNumber;
+  stationSchedule?: StationProjectionMatrix;
 }
 
 interface OrderTimers {
@@ -33,6 +36,8 @@ export function ProductionSchedule({
   isStationMode = false,
   onOrderClick,
   currentOrderId,
+  stationNumber,
+  stationSchedule,
 }: ProductionScheduleProps) {
   const [now, setNow] = useState(currentTime);
   const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
@@ -130,6 +135,23 @@ export function ProductionSchedule({
     }
 
     return `${prefix}${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const formatDuration = (ms: number | null): string => {
+    if (ms === null || !Number.isFinite(ms)) {
+      return "--:--";
+    }
+
+    const totalSeconds = Math.max(Math.round(ms / 1000), 0);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    }
+
+    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   };
 
   const getPanicEmoji = (level: number): string => {
@@ -232,6 +254,10 @@ export function ProductionSchedule({
           {productionOrders.map((order, index) => {
             const timers = calculateTimers(order);
             const statusColor = getStatusColor(order, timers);
+            const stationProjection =
+              stationNumber && stationSchedule
+                ? stationSchedule[order.id]?.[stationNumber]
+                : undefined;
 
             const isCurrentOrder = currentOrderId === order.id;
             const queuePosition = index + 1;
@@ -368,6 +394,61 @@ export function ProductionSchedule({
                     </div>
                   </div>
                 </div>
+
+                {stationProjection && (
+                  <div className="grid grid-cols-2 gap-1 mt-1 pt-1 border-t border-current border-opacity-20">
+                    <div>
+                      <div className="text-xs opacity-60">Station Expected</div>
+                      <div className="flex items-center gap-1">
+                        <div className="flex-1 bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full transition-all duration-500 ${
+                              stationProjection.isPaused
+                                ? "bg-yellow-500"
+                                : stationProjection.isBlocked
+                                  ? "bg-gray-400"
+                                  : "bg-emerald-500"
+                            }`}
+                            style={{
+                              width: `${stationProjection.expectedProgress}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="text-xs font-mono">
+                          {stationProjection.expectedProgress.toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs opacity-60">Station Mean</div>
+                      <div className="text-xs font-mono">
+                        {formatDuration(stationProjection.durationMs)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {stationProjection && (
+                  <div className="mt-1 flex items-center justify-between text-[10px] uppercase tracking-wide opacity-70">
+                    <span>
+                      {stationProjection.isPaused
+                        ? "Paused"
+                        : stationProjection.isComplete
+                          ? "Confirmed"
+                          : stationProjection.isBlocked
+                            ? "Waiting"
+                            : "Scheduled"}
+                    </span>
+                    <span>
+                      {stationProjection.expectedEndTime === null
+                        ? "ETA blocked"
+                        : `ETA ${formatDuration(
+                            stationProjection.expectedEndTime - now,
+                          )}`}
+                    </span>
+                  </div>
+                )}
 
                 {timers.isLate && order.status === "WIP" && (
                   <div className="mt-1 p-1 bg-red-200 text-red-800 rounded text-xs font-medium animate-pulse">
