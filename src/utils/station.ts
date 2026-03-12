@@ -1,6 +1,12 @@
 // Production station definitions and utilities
 
-import type { Order } from "./orders";
+// Define a minimal Order interface to avoid circular dependency
+// This matches the Order type in gameState.ts but only includes fields needed here
+interface Order {
+  quantity: number;
+  size: string;
+  verseSize: number;
+}
 
 // Normal distribution type for statistical calculations
 export interface NormalDistribution {
@@ -74,8 +80,8 @@ export class StationManager {
   }
 }
 
-// Global station manager instance (or you can instantiate per component)
-export const stationManager = new StationManager();
+// Use gameState.getStationManager() instead of this duplicate
+// import { gameState } from "./gameState";
 
 export function calculateStationOccupationTimePerOrder(
   station: Station,

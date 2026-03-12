@@ -196,3 +196,70 @@ Any laptop can act as manager by accessing the same URL. All data is in cloud, n
 
 ## Conflict Resolution
 Using default "Auto Merge" - last write wins at field level. Good enough for 6 users with verbal communication.
+
+## Update Frequency & Rate Limits
+
+### Limits to be aware of:
+- **AppSync subscriptions**: ~100 updates/second per client
+- **Rapid updates**: Multiple updates/second to same object can cause conflicts
+- **Cost**: Each write operation costs money (DynamoDB write units)
+
+### Best practices:
+- **DON'T** update every second for timers/counters
+- **DO** track time locally, sync at meaningful events (start, pause, complete)
+- **DO** batch updates when possible (update every 10-30 seconds vs every second)
+- **DO** use optimistic UI updates (update local state immediately, sync in background)
+
+## State Management Options
+
+Since multiple components need order data, choose one:
+
+1. **Use DataStore as central store** (recommended)
+   - Components subscribe directly to DataStore
+   - No additional state management needed
+   - Single source of truth
+
+2. **React Context** for local state + DataStore for sync
+   - Useful if you need complex derived state
+   - More control over re-renders
+
+3. **Zustand** for local state + DataStore for sync
+   - Cleaner than Context
+   - Good for complex local state
+
+## Error Handling
+
+```javascript
+// Monitor connection status
+Hub.listen('datastore', (data) => {
+  if (data.payload.event === 'networkStatus') {
+    setIsOnline(data.payload.active);
+  }
+  if (data.payload.event === 'syncQueriesReady') {
+    setIsSynced(true);
+  }
+});
+
+// Handle sync errors
+DataStore.observe().subscribe({
+  error: (err) => {
+    console.error('Sync error:', err);
+    // Show user notification
+  }
+});
+```
+
+## Testing Sync Locally
+
+1. Open app in multiple browser tabs
+2. Use Chrome DevTools Network tab to simulate offline
+3. Make changes while offline
+4. Go back online and verify sync
+
+## Common Gotchas
+
+- **_version field**: Required for optimistic concurrency, don't manually modify
+- **ID generation**: Let DataStore generate IDs unless you need deterministic IDs
+- **Large datasets**: Use pagination with DataStore.query() for >1000 items
+- **Subscriptions**: Always unsubscribe in cleanup functions to prevent memory leaks
+- **Initial load**: First sync might be slow with lots of historical data - consider limiting initial query

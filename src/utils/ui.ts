@@ -1,5 +1,5 @@
-import { Order, OrderStatus } from './orders';
-import { PaperColor, PAPER_COLORS } from './assets';
+import type { Order, OrderStatus } from './gameState';
+import { PaperColor, PAPER_COLORS } from './gameState';
 
 // Fuzzy search for occasions
 export const fuzzySearch = (query: string, items: string[]) => {
@@ -23,11 +23,16 @@ export const fuzzySearch = (query: string, items: string[]) => {
 };
 
 // Color mapping for paper colors
-export const getColorClass = (color: PaperColor) => {
-  const colorDef = PAPER_COLORS.find(
-    (c) => c.code === color || c.name === color,
-  );
-  return colorDef?.class || "bg-gray-100";
+export const getColorClass = (color: PaperColor | string) => {
+  // Handle both PaperColor objects and string codes for backwards compatibility
+  if (typeof color === 'string') {
+    const colorDef = PAPER_COLORS.find(
+      (c) => c.code === color || c.name === color,
+    );
+    return colorDef?.cssClass || "bg-gray-100";
+  } else {
+    return color.cssClass || "bg-gray-100";
+  }
 };
 
 // Get row color based on availability and status

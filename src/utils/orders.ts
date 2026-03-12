@@ -1,32 +1,15 @@
-import { Transaction, PaperInventory, PAPER_COLORS, FAILURE_FINE_RATIO } from './assets';
-
-// Order-related types
-export type OrderStatus =
-  | "passive"
-  | "ordered"
-  | "pending_inventory"
-  | "WIP"
-  | "sent"
-  | "approved"
-  | "failed"
-  | "deleted"
-  | "other";
-
-export interface Order {
-  id: string;
-  orderTime: number; // timestamp when order was placed
-  quantity: number;
-  leadTime: number; // -1 means infinite
-  paperColor: string; // PaperColor type moved to assets
-  size: string; // A5, A6, A7
-  verseSize: number;
-  occasion: string;
-  price: number;
-  available: boolean;
-  status: OrderStatus;
-  startTime?: number;
-  dueTime?: number;
-}
+import type { 
+  Transaction, 
+  PaperInventory, 
+  Order,
+  OrderStatus 
+} from './gameState';
+import { 
+  PaperColor, 
+  PAPER_COLORS, 
+  PAPER_COLOR_MAP, 
+  FAILURE_FINE_RATIO
+} from './gameState';
 
 // Order constants
 export const OCCASIONS = [
@@ -54,12 +37,15 @@ export const OCCASIONS = [
 
 // Add new order
 export const addOrder = (): Order => {
+  // Default to white paper
+  const defaultColor = PAPER_COLOR_MAP.get("w") || PAPER_COLORS[0];
+  
   const newOrder: Order = {
     id: Date.now().toString(),
     orderTime: Date.now(),
     quantity: 50,
     leadTime: 7,
-    paperColor: "w",
+    paperColor: defaultColor,
     size: "A5",
     verseSize: 4,
     occasion: "",

@@ -1,26 +1,27 @@
 import { useState, useEffect, useRef } from "react";
 import "./App.css";
-import {
+import type {
   Order,
   OrderStatus,
-  OCCASIONS,
-  addOrder as createNewOrder,
-  deleteRecentOrder as deleteRecentPassiveOrder,
-  updateOrder as updateOrderWithTransactions,
-} from "./utils/orders";
+} from "./utils/gameState";
 import {
+  addOrder,
+  deleteRecentOrder,
+  updateOrder,
+} from "./utils/orders";
+import type {
   PaperInventory,
   Transaction,
+} from "./utils/gameState";
+import {
+  gameState,
+  PaperColor,
   PAPER_COLORS,
-  SELL_MARKDOWN,
-  FAILURE_FINE_RATIO,
+  PAPER_COLOR_MAP,
+  OCCASIONS,
   getColorName,
-  getColorCode,
   getColorPrice,
-  calculateNetWorth,
-  calculateProfit,
-  addTransaction as createTransaction,
-} from "./utils/assets";
+} from "./utils/gameState";
 import {
   fuzzySearch,
   getColorClass,
@@ -46,7 +47,7 @@ function App() {
       orderTime: Date.now(),
       quantity: 12,
       leadTime: 15,
-      paperColor: "w",
+      paperColor: PAPER_COLOR_MAP.get("w")!,  // White paper as default
       size: "A5",
       verseSize: 4,
       occasion: "Birthday",
@@ -68,6 +69,10 @@ function App() {
   const [activeColorIndex, setActiveColorIndex] = useState(-1);
   const [colorSearch, setColorSearch] = useState("");
   const [filteredColors, setFilteredColors] = useState<string[]>([]);
+  const [showNewColorDialog, setShowNewColorDialog] = useState(false);
+  const [newColorName, setNewColorName] = useState("");
+  const [newColorPrice, setNewColorPrice] = useState(20);
+  const [pendingColorOrderId, setPendingColorOrderId] = useState<string | null>(null);
 
   // Inventory Management State - the game starts with nothing, then we will manually buy
   const [paperInventory, setPaperInventory] = useState<PaperInventory>({
@@ -86,21 +91,12 @@ function App() {
     null,
   );
   const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
 
-  // Add new order
-  const addOrder = () => {
-    const newOrder = createNewOrder();
-    setOrders([...orders, newOrder]);
-  };
-
-  // Delete most recent passive order
-  const deleteRecentOrder = () => {
-    setOrders(deleteRecentPassiveOrder(orders));
-  };
 
   // Update order
-  const updateOrder = (id: string, field: keyof Order, value: any) => {
-    const updatedOrders = updateOrderWithTransactions(
+  const updateOrderField = (id: string, field: keyof Order, value: any) => {
+    const updatedOrders = updateOrder(
       orders,
       id,
       field,
@@ -141,9 +137,7 @@ function App() {
       }
     };
 
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
+    const handleMouseUp = () => setIsDragging(false);
 
     if (isDragging) {
       document.addEventListener("mousemove", handleMouseMove);
@@ -166,7 +160,8 @@ function App() {
       // Ctrl+N: Add new order
       if (e.ctrlKey && e.key === "n") {
         e.preventDefault();
-        addOrder();
+        const newOrder = addOrder();
+        setOrders([...orders, newOrder]);
       }
       // Ctrl+Z: Delete newest passive order
       if (e.ctrlKey && e.key === "z") {
@@ -174,7 +169,7 @@ function App() {
         if (showUndo) {
           undoLastAction();
         } else {
-          deleteRecentOrder();
+          setOrders(deleteRecentOrder(orders));
         }
       }
     };
@@ -211,7 +206,7 @@ function App() {
     affectsInventory?: boolean,
     orderId?: string,
   ) => {
-    const newTransaction = createTransaction(
+    const newTransaction = gameState.createTransaction(
       amount,
       reason,
       paperColor,
@@ -232,6 +227,62 @@ function App() {
     }
   };
 
+  // Edit transaction
+  const editTransaction = (id: string, updates: Partial<Transaction>) => {
+    const transIndex = transactions.findIndex(t => t.id === id);
+    if (transIndex === -1) return;
+    
+    const oldTrans = transactions[transIndex];
+    const newTrans = { ...oldTrans, ...updates };
+    
+    // Update transactions array
+    const newTransactions = [...transactions];
+    newTransactions[transIndex] = newTrans;
+    setTransactions(newTransactions);
+    
+    // Update cash if amount changed
+    if (updates.amount !== undefined) {
+      const amountDiff = newTrans.amount - oldTrans.amount;
+      setCash((prev) => prev + amountDiff);
+    }
+    
+    // Update inventory if paper transaction changed
+    if (oldTrans.paperColor && oldTrans.paperQuantity) {
+      // Reverse old transaction
+      setPaperInventory((prev) => ({
+        ...prev,
+        [oldTrans.paperColor!]: (prev[oldTrans.paperColor!] || 0) - oldTrans.paperQuantity!,
+      }));
+    }
+    if (newTrans.paperColor && newTrans.paperQuantity) {
+      // Apply new transaction
+      setPaperInventory((prev) => ({
+        ...prev,
+        [newTrans.paperColor!]: (prev[newTrans.paperColor!] || 0) + newTrans.paperQuantity!,
+      }));
+    }
+  };
+
+  // Delete transaction
+  const deleteTransaction = (id: string) => {
+    const trans = transactions.find(t => t.id === id);
+    if (!trans) return;
+    
+    // Remove from transactions
+    setTransactions(transactions.filter(t => t.id !== id));
+    
+    // Reverse the cash effect
+    setCash((prev) => prev - trans.amount);
+    
+    // Reverse inventory effect if it's a paper transaction
+    if (trans.paperColor && trans.paperQuantity) {
+      setPaperInventory((prev) => ({
+        ...prev,
+        [trans.paperColor!]: (prev[trans.paperColor!] || 0) - trans.paperQuantity!,
+      }));
+    }
+  };
+
   return (
     <div className="min-h-screen w-full bg-gray-100">
       {/* Cash Metrics Header Bar */}
@@ -247,15 +298,15 @@ function App() {
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400">Net Worth:</span>
               <span className="text-sm font-bold text-blue-400">
-                £{calculateNetWorth(cash, paperInventory, transactions).toFixed(2)}
+                £{gameState.calculateNetWorth().toFixed(2)}
               </span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400">Profit:</span>
               <span
-                className={`text-sm font-bold ${calculateProfit(cash, paperInventory, transactions) >= 0 ? "text-green-400" : "text-red-400"}`}
+                className={`text-sm font-bold ${gameState.calculateProfit() >= 0 ? "text-green-400" : "text-red-400"}`}
               >
-                £{calculateProfit(cash, paperInventory, transactions).toFixed(2)}
+                £{gameState.calculateProfit().toFixed(2)}
               </span>
             </div>
           </div>
@@ -339,7 +390,7 @@ function App() {
                             if (!isNaN(hours) && !isNaN(minutes)) {
                               const newDate = new Date(order.orderTime);
                               newDate.setHours(hours, minutes);
-                              updateOrder(
+                              updateOrderField(
                                 order.id,
                                 "orderTime",
                                 newDate.getTime(),
@@ -355,7 +406,7 @@ function App() {
                           type="text"
                           value={order.quantity}
                           onChange={(e) =>
-                            updateOrder(
+                            updateOrderField(
                               order.id,
                               "quantity",
                               parseInt(e.target.value) || 0,
@@ -369,7 +420,7 @@ function App() {
                           type="text"
                           value={order.leadTime}
                           onChange={(e) =>
-                            updateOrder(
+                            updateOrderField(
                               order.id,
                               "leadTime",
                               parseInt(e.target.value) || -1,
@@ -383,7 +434,7 @@ function App() {
                         <input
                           ref={(el) => (colorInputRefs.current[order.id] = el)}
                           type="text"
-                          value={getColorName(order.paperColor)}
+                          value={order.paperColor.name}
                           onChange={(e) => {
                             const value = e.target.value;
                             setColorSearch(value);
@@ -399,10 +450,10 @@ function App() {
                                 c.name.toLowerCase() === value.toLowerCase(),
                             );
                             if (exactMatch) {
-                              updateOrder(
+                              updateOrderField(
                                 order.id,
                                 "paperColor",
-                                exactMatch.code,
+                                exactMatch,
                               );
                             }
                           }}
@@ -417,10 +468,43 @@ function App() {
                             setActiveColorIndex(index);
                           }}
                           onBlur={() => {
+                            // Check if user typed something that doesn't exist
+                            if (colorSearch && colorSearch !== order.paperColor.name) {
+                              const exactMatch = PAPER_COLORS.find(
+                                (c) => c.name.toLowerCase() === colorSearch.toLowerCase()
+                              );
+                              if (!exactMatch && filteredColors.length === 0) {
+                                // No matches at all - prompt to create new color
+                                setNewColorName(colorSearch);
+                                setPendingColorOrderId(order.id);
+                                setShowNewColorDialog(true);
+                              }
+                            }
                             setTimeout(() => {
                               setActiveColorIndex(-1);
                               setFilteredColors([]);
+                              setColorSearch("");
                             }, 200);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Tab' && filteredColors.length > 0) {
+                              // Auto-populate with top match on Tab
+                              const topMatch = PAPER_COLORS.find(c => c.name === filteredColors[0]);
+                              if (topMatch) {
+                                updateOrderField(order.id, "paperColor", topMatch);
+                              }
+                            } else if (e.key === 'Enter' && colorSearch && filteredColors.length === 0) {
+                              // Enter with no matches - prompt to create new color
+                              e.preventDefault();
+                              const exactMatch = PAPER_COLORS.find(
+                                (c) => c.name.toLowerCase() === colorSearch.toLowerCase()
+                              );
+                              if (!exactMatch) {
+                                setNewColorName(colorSearch);
+                                setPendingColorOrderId(order.id);
+                                setShowNewColorDialog(true);
+                              }
+                            }
                           }}
                           className={`w-full px-1 py-1.5 border rounded text-xs h-8 ${getColorClass(order.paperColor)}`}
                           placeholder="Color..."
@@ -438,20 +522,20 @@ function App() {
                                     onMouseDown={(e) => {
                                       e.preventDefault();
                                       if (color) {
-                                        updateOrder(
+                                        updateOrderField(
                                           order.id,
                                           "paperColor",
-                                          color.code,
+                                          color,
                                         );
                                       }
                                       setFilteredColors([]);
                                       setActiveColorIndex(-1);
                                     }}
-                                    className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.class} flex justify-between items-center`}
+                                    className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.cssClass} flex justify-between items-center`}
                                   >
                                     <span>{colorName}</span>
                                     <span className="text-gray-500">
-                                      £{color?.price}/sheet
+                                      £{color?.basePrice}/sheet
                                     </span>
                                   </button>
                                 );
@@ -464,7 +548,7 @@ function App() {
                           type="text"
                           value={order.size}
                           onChange={(e) =>
-                            updateOrder(order.id, "size", e.target.value)
+                            updateOrderField(order.id, "size", e.target.value)
                           }
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="Size"
@@ -475,7 +559,7 @@ function App() {
                           type="text"
                           value={order.verseSize}
                           onChange={(e) =>
-                            updateOrder(
+                            updateOrderField(
                               order.id,
                               "verseSize",
                               parseInt(e.target.value) || 0,
@@ -493,7 +577,7 @@ function App() {
                           value={order.occasion}
                           onChange={(e) => {
                             const value = e.target.value;
-                            updateOrder(order.id, "occasion", value);
+                            updateOrderField(order.id, "occasion", value);
                             setOccasionSearch(value);
                             setFilteredOccasions(fuzzySearch(value, OCCASIONS));
                             setActiveOccasionIndex(
@@ -524,7 +608,7 @@ function App() {
                                   key={occasion}
                                   onMouseDown={(e) => {
                                     e.preventDefault();
-                                    updateOrder(order.id, "occasion", occasion);
+                                    updateOrderField(order.id, "occasion", occasion);
                                     setFilteredOccasions([]);
                                     setActiveOccasionIndex(-1);
                                   }}
@@ -543,7 +627,7 @@ function App() {
                             type="text"
                             value={order.price}
                             onChange={(e) =>
-                              updateOrder(
+                              updateOrderField(
                                 order.id,
                                 "price",
                                 parseFloat(e.target.value) || 0,
@@ -559,7 +643,7 @@ function App() {
                             type="checkbox"
                             checked={order.available}
                             onChange={(e) =>
-                              updateOrder(
+                              updateOrderField(
                                 order.id,
                                 "available",
                                 e.target.checked,
@@ -574,7 +658,7 @@ function App() {
                         <select
                           value={order.status}
                           onChange={(e) =>
-                            updateOrder(
+                            updateOrderField(
                               order.id,
                               "status",
                               e.target.value as OrderStatus,
@@ -1257,6 +1341,87 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* New Color Creation Dialog */}
+      {showNewColorDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-4 max-w-md w-full">
+            <h3 className="text-lg font-bold mb-3">Create New Paper Color</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              The color "{newColorName}" doesn't exist. Would you like to create it?
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">Color Name</label>
+                <input
+                  type="text"
+                  value={newColorName}
+                  onChange={(e) => setNewColorName(e.target.value)}
+                  className="w-full px-2 py-1 border rounded text-sm"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Price per Sheet (£)</label>
+                <input
+                  type="number"
+                  value={newColorPrice}
+                  onChange={(e) => setNewColorPrice(parseFloat(e.target.value) || 20)}
+                  min="0"
+                  step="0.5"
+                  className="w-full px-2 py-1 border rounded text-sm"
+                />
+              </div>
+              <div className="text-xs text-gray-500">
+                CSS class will be auto-generated as: bg-gray-100
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => {
+                  // Create the new color
+                  const colorCode = newColorName.substring(0, 2).toLowerCase();
+                  const newColor = new PaperColor(
+                    colorCode,
+                    newColorName,
+                    "bg-gray-100", // Default CSS class for new colors
+                    newColorPrice
+                  );
+                  
+                  // Add to PAPER_COLORS array
+                  PAPER_COLORS.push(newColor);
+                  PAPER_COLOR_MAP.set(colorCode, newColor);
+                  
+                  // Update the pending order with the new color
+                  if (pendingColorOrderId) {
+                    updateOrderField(pendingColorOrderId, "paperColor", newColor);
+                  }
+                  
+                  // Close dialog and reset
+                  setShowNewColorDialog(false);
+                  setNewColorName("");
+                  setNewColorPrice(20);
+                  setPendingColorOrderId(null);
+                }}
+                className="flex-1 px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium"
+              >
+                Create Color
+              </button>
+              <button
+                onClick={() => {
+                  setShowNewColorDialog(false);
+                  setNewColorName("");
+                  setNewColorPrice(20);
+                  setPendingColorOrderId(null);
+                }}
+                className="flex-1 px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
