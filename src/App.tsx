@@ -426,22 +426,25 @@ function App() {
         </div>
       </div>
 
-      {/* Two-pane section */}
-      <div className="flex relative">
-        {/* Left Pane - Order Management */}
-        <div
-          className="bg-white border-r border-gray-300"
-          style={{ width: `${leftPaneWidth}%` }}
-        >
-          <div className="p-2">
-            <div className="flex justify-between items-center mb-1">
-              <h2 className="text-base font-bold text-gray-800">
-                Order Management
-              </h2>
-            </div>
+      {/* Render different views based on currentView */}
+      {currentView === "operations" ? (
+        <>
+          {/* Two-pane section - Operations Management View */}
+          <div className="flex relative">
+            {/* Left Pane - Order Management */}
+            <div
+              className="bg-white border-r border-gray-300"
+              style={{ width: `${leftPaneWidth}%` }}
+            >
+              <div className="p-2">
+                <div className="flex justify-between items-center mb-1">
+                  <h2 className="text-base font-bold text-gray-800">
+                    Order Management
+                  </h2>
+                </div>
 
-            {/* Orders Table */}
-            <div className="mb-2 overflow-x-auto">
+                {/* Orders Table */}
+                <div className="mb-2 overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 border-b">
                   <tr>
@@ -715,14 +718,12 @@ function App() {
                             updateOrderField(order.id, "occasion", value);
                             setOccasionSearch(value);
                             setFilteredOccasions(fuzzySearch(value, OCCASIONS));
-                            setActiveOccasionIndex(
-                              order.id === activeOccasionIndex ? -1 : -1,
-                            );
+                            setActiveOccasionIndex(index);
                           }}
                           onFocus={(e) => {
                             setOccasionSearch(e.target.value);
                             setFilteredOccasions(
-                              fuzzySearch(e.target.value, OCCASIONS),
+                              e.target.value ? fuzzySearch(e.target.value, OCCASIONS) : OCCASIONS
                             );
                             setActiveOccasionIndex(index);
                           }}
@@ -730,7 +731,25 @@ function App() {
                             setTimeout(() => {
                               setActiveOccasionIndex(-1);
                               setFilteredOccasions([]);
+                              setOccasionSearch("");
                             }, 200);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Tab' && filteredOccasions.length > 0) {
+                              // Auto-populate with top match on Tab
+                              updateOrderField(order.id, "occasion", filteredOccasions[0]);
+                              setActiveOccasionIndex(-1);
+                              setFilteredOccasions([]);
+                            } else if (e.key === 'Enter' && filteredOccasions.length > 0) {
+                              // Select the first match on Enter
+                              e.preventDefault();
+                              updateOrderField(order.id, "occasion", filteredOccasions[0]);
+                              setActiveOccasionIndex(-1);
+                              setFilteredOccasions([]);
+                            } else if (e.key === 'Escape') {
+                              setActiveOccasionIndex(-1);
+                              setFilteredOccasions([]);
+                            }
                           }}
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="Occasion..."
@@ -1023,10 +1042,10 @@ function App() {
             </div>
           </div>
         </div>
-      </div>
+          </div>
 
-      {/* Full-width sections below the two panes */}
-      <div className="bg-white border-t border-gray-300">
+          {/* Full-width sections below the two panes - Only for operations view */}
+          <div className="bg-white border-t border-gray-300">
         <div className="p-2">
           <h2 className="text-base font-bold text-gray-800 mb-2">
             Inventory Management System
@@ -1537,8 +1556,21 @@ function App() {
           </div>
         </div>
       </div>
+        </>
+      ) : (
+        /* Station Views */
+        <div className="h-screen bg-gray-100">
+          <StationView
+            stationNumber={currentView === "station1" ? 1 : currentView === "station2" ? 2 : 3}
+            orders={orders}
+            setOrders={setOrders}
+            updateOrderField={updateOrderField}
+            currentTime={currentTime}
+          />
+        </div>
+      )}
 
-      {/* New Color Creation Dialog */}
+      {/* New Color Creation Dialog - Always rendered regardless of view */}
       {showNewColorDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-4 max-w-md w-full">
