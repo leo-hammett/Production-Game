@@ -7,20 +7,20 @@ import type {
 import {
   addOrder,
   deleteRecentOrder,
+  normalizeScheduleOrderIds,
   updateOrder,
 } from "./utils/orders";
 import { ProductionSchedule } from "./components/ProductionSchedule";
 import { StationView } from "./components/StationView";
-import { OperationsManagementView } from "./components/OperationsManagementView";
 import type {
   PaperInventory,
   Transaction,
 } from "./utils/gameState";
+import { useAmplifySharedGameState } from "./hooks/useAmplifySharedGameState";
 import {
   gameState,
   PaperColor,
   PAPER_COLORS,
-  PAPER_COLOR_MAP,
   OCCASIONS,
   getColorName,
   getColorPrice,
@@ -33,8 +33,40 @@ import {
   getStatusColor,
   formatTime,
 } from "./utils/ui";
+import { DEFAULT_TEAM_ID, TEAM_ID_STORAGE_KEY } from "./utils/sharedGameState";
 
 type ViewType = "operations" | "station1" | "station2" | "station3";
+
+function getSyncStatusClass(state: string): string {
+  switch (state) {
+    case "synced":
+      return "text-green-300";
+    case "syncing":
+    case "connecting":
+    case "configuring":
+      return "text-yellow-300";
+    case "error":
+      return "text-red-300";
+    default:
+      return "text-gray-300";
+  }
+}
+
+function areOrderIdListsEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((orderId, index) => orderId === right[index])
+  );
+}
+
+function getPaperSizeDigits(size: string): string {
+  return size.toUpperCase().replace(/A/g, "").replace(/[^0-9]/g, "");
+}
+
+function normalizePaperSize(value: string): string {
+  const digits = getPaperSizeDigits(value);
+  return digits ? `A${digits}` : "";
+}
 
 function App() {
   // View state
@@ -45,23 +77,17 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const dividerRef = useRef<HTMLDivElement>(null);
 
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: "1",
-      orderTime: Date.now(),
-      quantity: 12,
-      leadTime: 15,
-      paperColor: PAPER_COLOR_MAP.get("w")!,  // White paper as default
-      size: "A5",
-      verseSize: 4,
-      occasion: "Birthday",
-      price: 0,
-      available: true,
-      status: "passive",
-    },
-  ]); //can someone update this comment to tell me if we need to pre-populate these values, I'd much rather leave some of them blank.
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [teamId, setTeamId] = useState(() => {
+    if (typeof window === "undefined") {
+      return DEFAULT_TEAM_ID;
+    }
 
-  const [occasionSearch, setOccasionSearch] = useState("");
+    return window.localStorage.getItem(TEAM_ID_STORAGE_KEY) || DEFAULT_TEAM_ID;
+  });
+  const [teamIdInput, setTeamIdInput] = useState(teamId);
+
+  const [, setOccasionSearch] = useState("");
   const [filteredOccasions, setFilteredOccasions] = useState<string[]>([]);
   const [activeRowIndex, setActiveRowIndex] = useState(-1);
   const [activeField, setActiveField] = useState<'color' | 'occasion' | null>(null);
@@ -75,6 +101,7 @@ function App() {
   const [newColorName, setNewColorName] = useState("");
   const [newColorPrice, setNewColorPrice] = useState(20);
   const [pendingColorOrderId, setPendingColorOrderId] = useState<string | null>(null);
+  const [scheduleOrderIds, setScheduleOrderIds] = useState<string[]>([]);
 
   // Inventory Management State - the game starts with nothing, then we will manually buy
   const [paperInventory, setPaperInventory] = useState<PaperInventory>({
@@ -90,11 +117,26 @@ function App() {
   const [safetyStock, setSafetyStock] = useState(12);
   const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
-  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const syncStatus = useAmplifySharedGameState({
+    teamId,
+    orders,
+    setOrders,
+    paperInventory,
+    setPaperInventory,
+    transactions,
+    setTransactions,
+    cash,
+    setCash,
+    safetyStock,
+    setSafetyStock,
+    workstationSpeed,
+    setWorkstationSpeed,
+  });
 
 
   // Update order
-  const updateOrderField = (id: string, field: keyof Order, value: any) => {
+  const updateOrderField = (id: string, field: keyof Order, value: unknown) => {
     const updatedOrders = updateOrder(
       orders,
       id,
@@ -143,6 +185,31 @@ function App() {
 
   // Sync local state with gameState singleton
   useEffect(() => {
+    gameState.setOrders(orders);
+  }, [orders]);
+
+  useEffect(() => {
+    return gameState.subscribe(() => {
+      const nextOrderIds = gameState.getCurrentSchedule().orderIds;
+      setScheduleOrderIds((currentOrderIds) =>
+        areOrderIdListsEqual(currentOrderIds, nextOrderIds)
+          ? currentOrderIds
+          : [...nextOrderIds],
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    const normalizedOrderIds = normalizeScheduleOrderIds(orders, scheduleOrderIds);
+    if (areOrderIdListsEqual(scheduleOrderIds, normalizedOrderIds)) {
+      return;
+    }
+
+    setScheduleOrderIds(normalizedOrderIds);
+    gameState.updateScheduleOrderIds(normalizedOrderIds);
+  }, [orders, scheduleOrderIds]);
+
+  useEffect(() => {
     gameState.setCash(cash);
   }, [cash]);
 
@@ -152,7 +219,7 @@ function App() {
 
   useEffect(() => {
     gameState.setTransactions(transactions);
-  }, [transactions]);
+  }, [transactions, completePendingTransaction]);
 
   useEffect(() => {
     gameState.updateParameters({
@@ -161,21 +228,15 @@ function App() {
     });
   }, [workstationSpeed, safetyStock]);
 
-  // Timer for pending transactions countdown
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(Date.now());
-      
-      // Check for completed pending transactions
-      transactions.forEach(trans => {
-        if (trans.pending && trans.arrivalTime && Date.now() >= trans.arrivalTime) {
-          completePendingTransaction(trans.id);
-        }
-      });
-    }, 1000);
-    
-    return () => clearInterval(timer);
-  }, [transactions]);
+    gameState.setTeamId(teamId);
+    window.localStorage.setItem(TEAM_ID_STORAGE_KEY, teamId);
+    setTeamIdInput(teamId);
+  }, [teamId]);
+
+  useEffect(() => {
+    (window as Window & { gameState?: typeof gameState }).gameState = gameState;
+  }, []);
 
   // Warning before leaving the page
   useEffect(() => {
@@ -210,6 +271,15 @@ function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [orders]);
+
+  const applyTeamId = () => {
+    const normalized = teamIdInput.trim().toUpperCase();
+    if (!normalized) {
+      return;
+    }
+
+    setTeamId(normalized);
+  };
 
   // Statistics calculations (skeleton for backend)
   const stats = {
@@ -323,7 +393,7 @@ function App() {
   };
 
   // Complete a pending transaction
-  const completePendingTransaction = (id: string) => {
+  function completePendingTransaction(id: string) {
     const transIndex = transactions.findIndex(t => t.id === id);
     if (transIndex === -1) return;
     
@@ -343,7 +413,23 @@ function App() {
         [trans.paperColor!]: (prev[trans.paperColor!] || 0) + trans.paperQuantity!,
       }));
     }
-  };
+  }
+
+  // Timer for pending transactions countdown
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+      
+      // Check for completed pending transactions
+      transactions.forEach(trans => {
+        if (trans.pending && trans.arrivalTime && Date.now() >= trans.arrivalTime) {
+          completePendingTransaction(trans.id);
+        }
+      });
+    }, 1000);
+    
+    return () => clearInterval(timer);
+  }, [transactions]);
 
   return (
     <div className="min-h-screen w-full bg-gray-100">
@@ -427,6 +513,30 @@ function App() {
                 </span>
               </div>
             )}
+
+            <div className="flex items-center gap-2 border-l border-gray-600 pl-4">
+              <span className={`text-xs font-medium ${getSyncStatusClass(syncStatus.state)}`}>
+                {syncStatus.message}
+              </span>
+              <input
+                type="text"
+                value={teamIdInput}
+                onChange={(e) => setTeamIdInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    applyTeamId();
+                  }
+                }}
+                className="w-28 rounded border border-gray-500 bg-gray-800 px-2 py-1 text-xs text-white"
+                placeholder="TEAM ID"
+              />
+              <button
+                onClick={applyTeamId}
+                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
+              >
+                Join
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -555,7 +665,11 @@ function App() {
                         <input
                           ref={(el) => {colorInputRefs.current[order.id] = el}}
                           type="text"
-                          value={activeRowIndex === index && activeField === 'color' && colorSearch !== "" ? colorSearch : order.paperColor.name}
+                          value={
+                            activeRowIndex === index && activeField === "color"
+                              ? colorSearch
+                              : order.paperColor.name
+                          }
                           onChange={(e) => {
                             const value = e.target.value;
                             setColorSearch(value);
@@ -584,13 +698,13 @@ function App() {
                               setFilteredColors([]);
                             }
                           }}
-                          onFocus={(e) => {
-                            setColorSearch("");
+                          onFocus={() => {
+                            setColorSearch(order.paperColor.name);
                             setActiveRowIndex(index);
                             setActiveField('color');
                             setFilteredColors(
                               fuzzySearch(
-                                "",
+                                order.paperColor.name,
                                 PAPER_COLORS.map((c) => c.name),
                               ),
                             );
@@ -661,7 +775,7 @@ function App() {
                         />
                         {activeRowIndex === index && activeField === 'color' &&
                           filteredColors.length > 0 && (
-                            <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg">
+                            <div className="mt-1 w-full rounded border bg-white shadow-lg">
                               {filteredColors.map((colorName) => {
                                 const color = PAPER_COLORS.find(
                                   (c) => c.name === colorName,
@@ -682,7 +796,7 @@ function App() {
                                       setActiveRowIndex(-1);
                               setActiveField(null);
                                     }}
-                                    className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.cssClass} flex justify-between items-center`}
+                                    className={`flex w-full items-center justify-between px-2 py-1 text-left text-xs hover:bg-blue-50 ${color?.cssClass}`}
                                   >
                                     <span>{colorName}</span>
                                     <span className="text-gray-500">
@@ -695,15 +809,23 @@ function App() {
                           )}
                       </td>
                       <td className="px-2 py-1">
-                        <input
-                          type="text"
-                          value={order.size}
-                          onChange={(e) =>
-                            updateOrderField(order.id, "size", e.target.value)
-                          }
-                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
-                          placeholder="Size"
-                        />
+                        <div className="flex items-center gap-1 rounded border bg-white px-1 text-xs">
+                          <span className="text-gray-500">A</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={getPaperSizeDigits(order.size)}
+                            onChange={(e) =>
+                              updateOrderField(
+                                order.id,
+                                "size",
+                                normalizePaperSize(e.target.value),
+                              )
+                            }
+                            className="w-full py-1.5 text-xs h-8 outline-none"
+                            placeholder="5"
+                          />
+                        </div>
                       </td>
                       <td className="px-2 py-1">
                         <input
@@ -775,7 +897,7 @@ function App() {
                         />
                         {activeRowIndex === index && activeField === 'occasion' &&
                           filteredOccasions.length > 0 && (
-                            <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg max-h-32 overflow-y-auto">
+                            <div className="mt-1 max-h-32 w-full overflow-y-auto rounded border bg-white shadow-lg">
                               {filteredOccasions.map((occasion) => (
                                 <button
                                   key={occasion}
@@ -1055,8 +1177,12 @@ function App() {
             <div className="max-w-2xl mx-auto">
               <ProductionSchedule 
                 orders={orders} 
-                setOrders={setOrders}
                 updateOrderField={updateOrderField}
+                scheduleOrderIds={scheduleOrderIds}
+                onReorderSchedule={(nextOrderIds) => {
+                  setScheduleOrderIds(nextOrderIds);
+                  gameState.updateScheduleOrderIds(nextOrderIds);
+                }}
                 currentTime={currentTime}
               />
             </div>
@@ -1585,6 +1711,7 @@ function App() {
             orders={orders}
             setOrders={setOrders}
             updateOrderField={updateOrderField}
+            scheduleOrderIds={scheduleOrderIds}
             currentTime={currentTime}
           />
         </div>
@@ -1636,9 +1763,7 @@ function App() {
                     newColorPrice
                   );
                   
-                  // Add to PAPER_COLORS array
-                  PAPER_COLORS.push(newColor);
-                  PAPER_COLOR_MAP.set(colorCode, newColor);
+                  gameState.addPaperColor(newColor);
                   
                   // Update the pending order with the new color
                   if (pendingColorOrderId) {

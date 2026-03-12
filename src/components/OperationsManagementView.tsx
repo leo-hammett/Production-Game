@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { ProductionSchedule } from "./ProductionSchedule";
 import type { Order, OrderStatus, PaperInventory, Transaction } from "../utils/gameState";
 import {
@@ -13,6 +14,8 @@ import {
 import {
   addOrder,
   deleteRecentOrder,
+  getProductionScheduleOrderIds,
+  reorderOrders,
   updateOrder,
 } from "../utils/orders";
 import {
@@ -48,6 +51,16 @@ interface OperationsManagementViewProps {
   workstationSpeed: number;
   setWorkstationSpeed: React.Dispatch<React.SetStateAction<number>>;
 }
+
+interface DropdownPosition {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+  openUpward: boolean;
+}
+
+type DragDropPosition = "before" | "after";
 
 export function OperationsManagementView({
   orders,
@@ -89,6 +102,13 @@ export function OperationsManagementView({
   const [newColorPrice, setNewColorPrice] = useState(20);
   const [pendingColorOrderId, setPendingColorOrderId] = useState<string | null>(null);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [dropdownPosition, setDropdownPosition] =
+    useState<DropdownPosition | null>(null);
+  const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
+  const [dragTarget, setDragTarget] = useState<{
+    orderId: string;
+    position: DragDropPosition;
+  } | null>(null);
 
   // Accept suggestions
   const acceptSuggestions = () => {
@@ -134,6 +154,65 @@ export function OperationsManagementView({
       document.body.style.userSelect = "";
     };
   }, [isDragging]);
+
+  useEffect(() => {
+    const activeOrder = orders[activeRowIndex];
+    const isColorMenuOpen =
+      activeField === "color" && filteredColors.length > 0;
+    const isOccasionMenuOpen =
+      activeField === "occasion" && filteredOccasions.length > 0;
+
+    if (!activeOrder || (!isColorMenuOpen && !isOccasionMenuOpen)) {
+      setDropdownPosition(null);
+      return;
+    }
+
+    const input =
+      activeField === "color"
+        ? colorInputRefs.current[activeOrder.id]
+        : occasionInputRefs.current[activeOrder.id];
+
+    if (!input) {
+      setDropdownPosition(null);
+      return;
+    }
+
+    const updateDropdownPosition = () => {
+      const rect = input.getBoundingClientRect();
+      const viewportPadding = 8;
+      const gutter = 4;
+      const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+      const spaceAbove = rect.top - viewportPadding;
+      const openUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
+
+      setDropdownPosition({
+        left: Math.max(viewportPadding, rect.left),
+        top: openUpward ? rect.top - gutter : rect.bottom + gutter,
+        width: rect.width,
+        maxHeight: Math.max(
+          96,
+          Math.min(240, (openUpward ? spaceAbove : spaceBelow) - gutter),
+        ),
+        openUpward,
+      });
+    };
+
+    updateDropdownPosition();
+
+    window.addEventListener("resize", updateDropdownPosition);
+    window.addEventListener("scroll", updateDropdownPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateDropdownPosition);
+      window.removeEventListener("scroll", updateDropdownPosition, true);
+    };
+  }, [
+    activeField,
+    activeRowIndex,
+    filteredColors.length,
+    filteredOccasions.length,
+    orders,
+  ]);
 
   // Statistics calculations (skeleton for backend)
   const stats = {
@@ -269,6 +348,143 @@ export function OperationsManagementView({
     }
   };
 
+  const activeOrder = orders[activeRowIndex];
+  const productionOrderIds = getProductionScheduleOrderIds(orders);
+  const productionOrderPositions = productionOrderIds.reduce<Record<string, number>>(
+    (positions, orderId, index) => {
+      positions[orderId] = index + 1;
+      return positions;
+    },
+    {},
+  );
+  const dropdownStyle = dropdownPosition
+    ? {
+        left: dropdownPosition.left,
+        top: dropdownPosition.top,
+        width: dropdownPosition.width,
+        maxHeight: dropdownPosition.maxHeight,
+        transform: dropdownPosition.openUpward
+          ? "translateY(calc(-100% - 4px))"
+          : undefined,
+      }
+    : null;
+
+  const activeDropdown =
+    typeof document !== "undefined" &&
+    activeOrder &&
+    dropdownStyle &&
+    ((activeField === "color" && filteredColors.length > 0) ||
+      (activeField === "occasion" && filteredOccasions.length > 0))
+      ? createPortal(
+          <div
+            className="fixed z-[60] overflow-y-auto rounded border bg-white shadow-lg"
+            style={dropdownStyle}
+          >
+            {activeField === "color"
+              ? filteredColors.map((colorName) => {
+                  const color = PAPER_COLORS.find((c) => c.name === colorName);
+
+                  return (
+                    <button
+                      key={colorName}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        if (color) {
+                          updateOrderField(activeOrder.id, "paperColor", color);
+                        }
+                        setFilteredColors([]);
+                        setActiveRowIndex(-1);
+                        setActiveField(null);
+                        setColorSearch("");
+                      }}
+                      className={`flex w-full items-center justify-between px-2 py-1 text-left text-xs hover:bg-blue-50 ${color?.cssClass}`}
+                    >
+                      <span>{colorName}</span>
+                      <span className="text-gray-500">
+                        £{color?.basePrice}/sheet
+                      </span>
+                    </button>
+                  );
+                })
+              : filteredOccasions.map((occasion) => (
+                  <button
+                    key={occasion}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      updateOrderField(activeOrder.id, "occasion", occasion);
+                      setFilteredOccasions([]);
+                      setActiveRowIndex(-1);
+                      setActiveField(null);
+                      setOccasionSearch("");
+                    }}
+                    className="block w-full px-2 py-1 text-left text-xs hover:bg-blue-50"
+                  >
+                    {occasion}
+                  </button>
+                ))}
+          </div>,
+          document.body,
+        )
+      : null;
+
+  const handleRowDragStart = (
+    e: React.DragEvent<HTMLElement>,
+    orderId: string,
+  ) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", orderId);
+    setDraggedOrderId(orderId);
+    setDragTarget(null);
+  };
+
+  const getDragPosition = (
+    e: React.DragEvent<HTMLTableRowElement>,
+  ): DragDropPosition => {
+    const bounds = e.currentTarget.getBoundingClientRect();
+    return e.clientY - bounds.top < bounds.height / 2 ? "before" : "after";
+  };
+
+  const handleRowDragOver = (
+    e: React.DragEvent<HTMLTableRowElement>,
+    orderId: string,
+  ) => {
+    if (!draggedOrderId || draggedOrderId === orderId) {
+      return;
+    }
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragTarget({
+      orderId,
+      position: getDragPosition(e),
+    });
+  };
+
+  const handleRowDrop = (
+    e: React.DragEvent<HTMLTableRowElement>,
+    orderId: string,
+  ) => {
+    e.preventDefault();
+
+    if (!draggedOrderId || draggedOrderId === orderId) {
+      setDraggedOrderId(null);
+      setDragTarget(null);
+      return;
+    }
+
+    const position = getDragPosition(e);
+    setOrders((currentOrders) =>
+      reorderOrders(currentOrders, draggedOrderId, orderId, position),
+    );
+    setDraggedOrderId(null);
+    setDragTarget(null);
+  };
+
+  const clearDragState = () => {
+    setDraggedOrderId(null);
+    setDragTarget(null);
+  };
+
   return (
     <>
       {/* Two-pane section */}
@@ -290,6 +506,9 @@ export function OperationsManagementView({
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 border-b">
                   <tr>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Queue
+                    </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       ID
                     </th>
@@ -329,8 +548,38 @@ export function OperationsManagementView({
                   {orders.map((order, index) => (
                     <tr
                       key={order.id}
-                      className={`border-b hover:bg-gray-50 ${getRowColorClass(order)}`}
+                      onDragOver={(e) => handleRowDragOver(e, order.id)}
+                      onDrop={(e) => handleRowDrop(e, order.id)}
+                      className={`border-b hover:bg-gray-50 ${getRowColorClass(order)} ${
+                        draggedOrderId === order.id ? "opacity-50" : ""
+                      } ${
+                        dragTarget?.orderId === order.id &&
+                        dragTarget.position === "before"
+                          ? "border-t-4 border-t-blue-500"
+                          : ""
+                      } ${
+                        dragTarget?.orderId === order.id &&
+                        dragTarget.position === "after"
+                          ? "border-b-4 border-b-blue-500"
+                          : ""
+                      }`}
                     >
+                      <td className="px-2 py-1">
+                        <div className="flex items-center gap-2">
+                          <span
+                            draggable
+                            onDragStart={(e) => handleRowDragStart(e, order.id)}
+                            onDragEnd={clearDragState}
+                            className="cursor-grab select-none rounded border border-gray-300 bg-white px-1.5 py-1 text-[10px] text-gray-500 active:cursor-grabbing"
+                            title="Drag to reschedule"
+                          >
+                            ::
+                          </span>
+                          <span className="min-w-6 text-center text-[10px] font-semibold text-gray-500">
+                            {productionOrderPositions[order.id] ?? "-"}
+                          </span>
+                        </div>
+                      </td>
                       <td className="px-2 py-1">
                         <span className="font-mono text-xs text-gray-500">
                           {order.id.slice(-6)}
@@ -392,7 +641,11 @@ export function OperationsManagementView({
                         <input
                           ref={(el) => {colorInputRefs.current[order.id] = el}}
                           type="text"
-                          value={order.paperColor.name}
+                          value={
+                            activeRowIndex === index && activeField === "color"
+                              ? colorSearch
+                              : order.paperColor.name
+                          }
                           onChange={(e) => {
                             const value = e.target.value;
                             setColorSearch(value);
@@ -469,39 +722,6 @@ export function OperationsManagementView({
                           className={`w-full px-1 py-1.5 border rounded text-xs h-8 ${getColorClass(order.paperColor)}`}
                           placeholder="Color..."
                         />
-                        {activeRowIndex === index && activeField === 'color' &&
-                          filteredColors.length > 0 && (
-                            <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg">
-                              {filteredColors.map((colorName) => {
-                                const color = PAPER_COLORS.find(
-                                  (c) => c.name === colorName,
-                                );
-                                return (
-                                  <button
-                                    key={colorName}
-                                    onMouseDown={(e) => {
-                                      e.preventDefault();
-                                      if (color) {
-                                        updateOrderField(
-                                          order.id,
-                                          "paperColor",
-                                          color,
-                                        );
-                                      }
-                                      setFilteredColors([]);
-                                      setActiveRowIndex(-1);
-                                    }}
-                                    className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.cssClass} flex justify-between items-center`}
-                                  >
-                                    <span>{colorName}</span>
-                                    <span className="text-gray-500">
-                                      £{color?.basePrice}/sheet
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
                       </td>
                       <td className="px-2 py-1">
                         <input
@@ -549,36 +769,19 @@ export function OperationsManagementView({
                               fuzzySearch(e.target.value, OCCASIONS),
                             );
                             setActiveRowIndex(index);
-                            setActiveField('color');
+                            setActiveField('occasion');
                           }}
                           onBlur={() => {
                             setTimeout(() => {
                               setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredOccasions([]);
+                              setOccasionSearch("");
                             }, 200);
                           }}
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="Occasion..."
                         />
-                        {activeRowIndex === index && activeField === 'occasion' &&
-                          filteredOccasions.length > 0 && (
-                            <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg max-h-32 overflow-y-auto">
-                              {filteredOccasions.map((occasion) => (
-                                <button
-                                  key={occasion}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    updateOrderField(order.id, "occasion", occasion);
-                                    setFilteredOccasions([]);
-                                    setActiveRowIndex(-1);
-                                  }}
-                                  className="block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs"
-                                >
-                                  {occasion}
-                                </button>
-                              ))}
-                            </div>
-                          )}
                       </td>
                       <td className="px-2 py-1">
                         <div className="flex items-center">
@@ -643,6 +846,9 @@ export function OperationsManagementView({
                 <tfoot className="bg-gray-50 border-t">
                   <tr>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Queue
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       ID
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
@@ -702,6 +908,9 @@ export function OperationsManagementView({
                 </button>
               </div>
               <div className="text-xs text-gray-500 flex items-center gap-1">
+                <span className="px-1 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">
+                  Drag rows to reschedule
+                </span>
                 <span className="px-1 py-0.5 bg-gray-100 rounded text-xs">
                   Ctrl+N: New
                 </span>
@@ -850,8 +1059,8 @@ export function OperationsManagementView({
             <div className="max-w-2xl mx-auto">
               <ProductionSchedule 
                 orders={orders} 
-                setOrders={setOrders}
                 updateOrderField={updateOrderField}
+                scheduleOrderIds={productionOrderIds}
                 currentTime={currentTime}
               />
             </div>
@@ -1469,6 +1678,7 @@ export function OperationsManagementView({
           </div>
         </div>
       )}
+      {activeDropdown}
     </>
   );
 }

@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { ProductionSchedule } from "./ProductionSchedule";
 import type { Order } from "../utils/gameState";
+import { getVerseText } from "../utils/verses";
 
 interface StationViewProps {
   stationNumber: number;
   orders: Order[];
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
   updateOrderField: (id: string, field: keyof Order, value: any) => void;
+  scheduleOrderIds: string[];
   currentTime: number;
 }
 
@@ -15,11 +17,16 @@ export function StationView({
   orders, 
   setOrders, 
   updateOrderField,
+  scheduleOrderIds,
   currentTime 
 }: StationViewProps) {
   // Current order being worked on by this station
   const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
   const currentOrder = orders.find(o => o.id === currentOrderId);
+  const displayedVerse = currentOrder
+    ? currentOrder.selectedVerse ||
+      getVerseText(currentOrder.occasion, currentOrder.verseSize)
+    : undefined;
   
   // Resizable panes state
   const [leftPaneWidth, setLeftPaneWidth] = useState(70); // percentage
@@ -114,14 +121,16 @@ export function StationView({
                     <span className="font-bold text-lg">{currentOrder.occasion}</span>
                   </div>
                   <div className="flex justify-between text-base">
-                    <span className="text-gray-600 font-medium">Verse:</span>
-                    <span className="font-bold text-base">
-                      {currentOrder.selectedVerse || `Size ${currentOrder.verseSize} (TODO)`}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-base">
                     <span className="text-gray-600 font-medium">Team ID:</span>
                     <span className="font-bold text-lg">{(window as any).gameState?.getTeamId?.() || "TEAM-001"}</span>
+                  </div>
+                  <div className="rounded-xl border-2 border-gray-200 bg-white px-6 py-5 shadow-sm">
+                    <div className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">
+                      Verse
+                    </div>
+                    <p className="min-h-[20vh] whitespace-pre-line text-[clamp(2.75rem,6vw,6rem)] font-black leading-[0.88] tracking-[-0.03em] text-gray-900">
+                      {displayedVerse || `No verse for ${currentOrder.occasion}`}
+                    </p>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
                     <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: '45%' }}></div>
@@ -276,8 +285,8 @@ export function StationView({
           <div className="max-w-2xl mx-auto">
             <ProductionSchedule 
               orders={orders} 
-              setOrders={setOrders}
               updateOrderField={updateOrderField}
+              scheduleOrderIds={scheduleOrderIds}
               currentTime={currentTime}
               isStationMode={true}
               onOrderClick={setCurrentOrderId}

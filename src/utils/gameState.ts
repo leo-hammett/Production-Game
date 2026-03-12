@@ -272,6 +272,22 @@ class GameStateManager {
     }
   }
 
+  setOccasions(occasions: string[]) {
+    this.state.occasions.length = 0;
+    this.state.occasions.push(...occasions);
+    this.notify();
+  }
+
+  setPaperColors(colors: PaperColor[]) {
+    this.state.paperColors.length = 0;
+    this.state.paperColors.push(...colors);
+    this.state.paperColorMap.clear();
+    colors.forEach((color) => {
+      this.state.paperColorMap.set(color.code, color);
+    });
+    this.notify();
+  }
+
   // Calculate current worth of paper based on demand multipliers
   calculatePaperCurrentWorth(paperColor: PaperColor | string): number {
     const color =
@@ -425,8 +441,13 @@ class GameStateManager {
     return this.getBuyingCooldownRemaining() > 0;
   }
 
-  setCurrentSchedule(schedule: Schedule) {
-    this.state.currentSchedule = schedule;
+  setCurrentSchedule(
+    schedule: Schedule | { id: string; orderIds: string[] },
+  ) {
+    this.state.currentSchedule =
+      schedule instanceof Schedule
+        ? schedule
+        : new Schedule(schedule.id, schedule.orderIds);
     this.notify();
   }
 
@@ -599,4 +620,3 @@ export const getColorPrice = (code: string) => gameState.getColorPrice(code);
 export const calculateNetWorth = () => gameState.calculateNetWorth();
 export const calculateProfit = () => gameState.calculateProfit();
 export const addTransaction = gameState.createTransaction.bind(gameState);
-

@@ -1,0 +1,295 @@
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { generateClient } from "aws-amplify/data";
+import type { Schema } from "../../amplify/data/resource";
+import { gameState, type Order, type PaperInventory, type Transaction } from "../utils/gameState";
+import { configureAmplify } from "../utils/amplifyConfig";
+import {
+  SHARED_GAME_SCHEMA_VERSION,
+  buildSharedGameSnapshot,
+  createEmptySharedGameState,
+  deserializeSharedGameSnapshot,
+  type DeserializedSharedGameState,
+  type SharedGameSnapshot,
+} from "../utils/sharedGameState";
+
+const client = generateClient<Schema>();
+const SAVE_DEBOUNCE_MS = 500;
+
+export type SyncState =
+  | "configuring"
+  | "disabled"
+  | "connecting"
+  | "syncing"
+  | "synced"
+  | "error";
+
+export interface SyncStatus {
+  state: SyncState;
+  message: string;
+}
+
+interface AmplifySharedGameStateBindings {
+  teamId: string;
+  orders: Order[];
+  setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
+  paperInventory: PaperInventory;
+  setPaperInventory: React.Dispatch<React.SetStateAction<PaperInventory>>;
+  transactions: Transaction[];
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  cash: number;
+  setCash: React.Dispatch<React.SetStateAction<number>>;
+  safetyStock: number;
+  setSafetyStock: React.Dispatch<React.SetStateAction<number>>;
+  workstationSpeed: number;
+  setWorkstationSpeed: React.Dispatch<React.SetStateAction<number>>;
+}
+
+export function useAmplifySharedGameState(
+  bindings: AmplifySharedGameStateBindings,
+): SyncStatus {
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>({
+    state: "configuring",
+    message: "Loading Amplify configuration",
+  });
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [syncVersion, setSyncVersion] = useState(0);
+
+  const clientIdRef = useRef(crypto.randomUUID());
+  const initializedRef = useRef(false);
+  const skipPersistRef = useRef<string | null>(null);
+  const lastSavedRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void configureAmplify().then((configured) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (!configured) {
+        setSyncStatus({
+          state: "disabled",
+          message: "Sync disabled until amplify_outputs.json exists",
+        });
+        return;
+      }
+
+      setIsConfigured(true);
+      setSyncStatus({
+        state: "connecting",
+        message: `Connecting to ${bindings.teamId}`,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bindings.teamId]);
+
+  useEffect(() => gameState.subscribe(() => setSyncVersion((value) => value + 1)), []);
+
+  const applyLocalState = useEffectEvent(
+    (
+      nextState: DeserializedSharedGameState,
+      options: { skipNextPersist: boolean; serialized: string | null },
+    ) => {
+      if (options.skipNextPersist) {
+        skipPersistRef.current = options.serialized;
+        lastSavedRef.current = options.serialized;
+      } else {
+        skipPersistRef.current = null;
+        lastSavedRef.current = null;
+      }
+
+      gameState.setTeamId(nextState.teamId);
+      gameState.setPaperColors(nextState.paperColors);
+      gameState.setOccasions(nextState.occasions);
+      gameState.setCurrentSchedule(nextState.currentSchedule);
+      gameState.updateParameters(nextState.parameters);
+      bindings.setOrders(nextState.orders);
+      bindings.setPaperInventory(nextState.paperInventory);
+      bindings.setTransactions(nextState.transactions);
+      bindings.setCash(nextState.cash);
+      bindings.setSafetyStock(nextState.parameters.safetyStock);
+      bindings.setWorkstationSpeed(nextState.parameters.workstationSpeed);
+
+      initializedRef.current = true;
+      setSyncStatus({
+        state: "synced",
+        message: `Connected to ${nextState.teamId}`,
+      });
+    },
+  );
+
+  const persistSnapshot = useEffectEvent(
+    async (snapshot: SharedGameSnapshot, serialized: string) => {
+      setSyncStatus({
+        state: "syncing",
+        message: `Syncing ${snapshot.teamId}`,
+      });
+
+      const existing = await client.models.SharedGameState.get({
+        teamId: snapshot.teamId,
+      });
+
+      const revision = (existing.data?.revision ?? 0) + 1;
+      const payload = {
+        teamId: snapshot.teamId,
+        snapshot,
+        revision,
+        schemaVersion: SHARED_GAME_SCHEMA_VERSION,
+        updatedAtClient: new Date().toISOString(),
+        updatedBy: navigator.userAgent,
+        clientId: clientIdRef.current,
+      };
+
+      const result = existing.data
+        ? await client.models.SharedGameState.update(payload)
+        : await client.models.SharedGameState.create(payload);
+
+      if (result.errors?.length) {
+        throw new Error(result.errors.map((error) => error.message).join("; "));
+      }
+
+      lastSavedRef.current = serialized;
+      setSyncStatus({
+        state: "synced",
+        message: `Connected to ${snapshot.teamId}`,
+      });
+    },
+  );
+
+  useEffect(() => {
+    if (!isConfigured) {
+      return;
+    }
+
+    initializedRef.current = false;
+    skipPersistRef.current = null;
+    lastSavedRef.current = null;
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    let cancelled = false;
+
+    const subscription = client.models.SharedGameState.observeQuery({
+      filter: {
+        teamId: {
+          eq: bindings.teamId,
+        },
+      },
+    }).subscribe({
+      next: ({ items, isSynced }) => {
+        if (cancelled || !isSynced) {
+          return;
+        }
+
+        const record = items[0];
+        if (!record?.snapshot) {
+          applyLocalState(createEmptySharedGameState(bindings.teamId), {
+            skipNextPersist: false,
+            serialized: null,
+          });
+          return;
+        }
+
+        const snapshot = record.snapshot as SharedGameSnapshot;
+        const nextState = deserializeSharedGameSnapshot(snapshot);
+        const serialized = JSON.stringify(
+          buildSharedGameSnapshot({
+            ...nextState,
+            currentSchedule: nextState.currentSchedule,
+          }),
+        );
+
+        applyLocalState(nextState, {
+          skipNextPersist: true,
+          serialized,
+        });
+      },
+      error: (error) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.error("Amplify live sync failed", error);
+        setSyncStatus({
+          state: "error",
+          message: "Amplify live sync failed",
+        });
+      },
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [bindings.teamId, isConfigured]);
+
+  useEffect(() => {
+    if (!isConfigured || !initializedRef.current) {
+      return;
+    }
+
+    const snapshot = buildSharedGameSnapshot({
+      teamId: bindings.teamId,
+      orders: bindings.orders,
+      paperInventory: bindings.paperInventory,
+      transactions: bindings.transactions,
+      cash: bindings.cash,
+      parameters: gameState.getParameters(),
+      currentSchedule: gameState.getCurrentSchedule(),
+      occasions: gameState.getOccasions(),
+      paperColors: gameState.getPaperColors(),
+    });
+    const serialized = JSON.stringify(snapshot);
+
+    if (skipPersistRef.current === serialized) {
+      skipPersistRef.current = null;
+      lastSavedRef.current = serialized;
+      return;
+    }
+
+    if (lastSavedRef.current === serialized) {
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+
+    saveTimerRef.current = setTimeout(() => {
+      void persistSnapshot(snapshot, serialized).catch((error) => {
+        console.error("Amplify sync save failed", error);
+        setSyncStatus({
+          state: "error",
+          message: "Amplify sync save failed",
+        });
+      });
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [
+    bindings.cash,
+    bindings.orders,
+    bindings.paperInventory,
+    bindings.safetyStock,
+    bindings.teamId,
+    bindings.transactions,
+    bindings.workstationSpeed,
+    isConfigured,
+    syncVersion,
+  ]);
+
+  return syncStatus;
+}

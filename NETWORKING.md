@@ -1,265 +1,110 @@
-# Production Management System - Network Architecture
+# Network Sync Setup
 
-## Stack
-- **AWS Amplify DataStore** for sync (handles offline, real-time subscriptions, conflict resolution)
-- **DynamoDB** backend (via AppSync)
-- **React** frontend with single UI for all users
-- **AWS Cognito** for authentication
+This app now syncs through a single Amplify model called `SharedGameState`.
 
-## Setup
+What is shared:
+- Orders
+- Paper inventory
+- Transactions / cash
+- Global parameters
+- Current schedule
+- Custom paper colours
+- Occasion list
 
-**1. Initialize Amplify**
+How it works:
+- Each browser joins a `teamId` such as `TEAM-001`
+- The whole team state is saved as one JSON snapshot in Amplify
+- Browsers subscribe to that record and update in near real time
+- Writes are debounced in the client, then saved back to Amplify
+- Conflict behaviour is effectively last write wins for the whole snapshot
+
+## Why this design
+
+The app is still mostly local React state with some singleton game state on the side. A per-entity schema looked cleaner on paper, but it would have required rewriting most of the app. A single shared snapshot is the shortest reliable path to:
+
+- Every machine seeing the same board
+- No custom websocket server
+- Minimal changes to the existing UI logic
+
+## Backend model
+
+Amplify backend file:
+[amplify/data/resource.ts](/Volumes/makingthings/git-repos/Production-Game/amplify/data/resource.ts)
+
+Current model:
+- `SharedGameState`
+  - identifier: `teamId`
+  - `snapshot`: full game state JSON
+  - `revision`: client-side revision counter
+  - `updatedAtClient`
+  - `updatedBy`
+  - `clientId`
+
+Authorization:
+- Default auth mode is `apiKey`
+- Model auth is `allow.publicApiKey()`
+
+That is convenient for a shared factory/game floor setup, but it is not appropriate for sensitive production data. If you want logins later, switch this to Cognito and keep the same snapshot approach.
+
+## Frontend files
+
+Main sync code:
+- [src/hooks/useAmplifySharedGameState.ts](/Volumes/makingthings/git-repos/Production-Game/src/hooks/useAmplifySharedGameState.ts)
+- [src/utils/sharedGameState.ts](/Volumes/makingthings/git-repos/Production-Game/src/utils/sharedGameState.ts)
+- [src/utils/amplifyConfig.ts](/Volumes/makingthings/git-repos/Production-Game/src/utils/amplifyConfig.ts)
+- [src/App.tsx](/Volumes/makingthings/git-repos/Production-Game/src/App.tsx)
+
+Important behavior:
+- The app loads `amplify_outputs.json` at runtime
+- If that file is missing, the UI stays usable but sync is disabled
+- Team ID is stored locally in browser storage so each machine can rejoin the same board
+- New teams start blank instead of cloning the previous team’s local state
+
+## First deploy
+
+1. Configure AWS credentials locally.
+2. Start an Amplify sandbox and write outputs into the project root:
+
 ```bash
-amplify init
-amplify add api  # Choose GraphQL, enable DataStore
-amplify add auth # Choose: Default configuration, Username sign-in
-amplify push
+npx ampx sandbox --once --outputs-format json --outputs-out-dir .
 ```
 
-## Data Schema
-```graphql
-type Order @model @auth(rules: [{allow: private}]) {
-  id: ID!
-  name: String!
-  status: OrderStatus! # PENDING, IN_PROGRESS, COMPLETE
-  estimatedMinutes: Int
-  actualMinutes: Int
-  assignedWorker: String
-  startedAt: AWSDateTime
-  completedAt: AWSDateTime
-}
+That should create `amplify_outputs.json` in the repo root.
 
-type TimeRecord @model @auth(rules: [{allow: private}]) {
-  id: ID!
-  orderId: ID!
-  worker: String!
-  minutes: Int!
-  timestamp: AWSDateTime!
-}
+If you are deploying to a hosted Amplify backend instead of sandbox, generate outputs after deploy:
 
-enum OrderStatus {
-  PENDING
-  IN_PROGRESS
-  COMPLETE
-}
-```
-
-## Implementation
-
-**1. App Wrapper with Auth**
-```javascript
-// App.js
-import { Authenticator } from '@aws-amplify/ui-react';
-
-function App() {
-  return (
-    <Authenticator>
-      {({ signOut, user }) => (
-        <div>
-          <OrdersDashboard user={user} />
-          <button onClick={signOut}>Sign Out</button>
-        </div>
-      )}
-    </Authenticator>
-  );
-}
-```
-
-**2. Real-time Sync**
-```javascript
-// OrdersDashboard.js
-useEffect(() => {
-  const subscription = DataStore.observeQuery(Order)
-    .subscribe(snapshot => {
-      setOrders(snapshot.items);
-    });
-  return () => subscription.unsubscribe();
-}, []);
-```
-
-**3. Worker Claims Task**
-```javascript
-const claimOrder = async (orderId, user) => {
-  const order = await DataStore.query(Order, orderId);
-  await DataStore.save(
-    Order.copyOf(order, updated => {
-      updated.assignedWorker = user.username;
-      updated.status = 'IN_PROGRESS';
-      updated.startedAt = new Date().toISOString();
-    })
-  );
-};
-```
-
-**4. Submit Time Record**
-```javascript
-const completeOrder = async (orderId, user, minutes) => {
-  // Save time record
-  await DataStore.save(new TimeRecord({
-    orderId,
-    worker: user.username,
-    minutes,
-    timestamp: new Date().toISOString()
-  }));
-  
-  // Update order
-  const order = await DataStore.query(Order, orderId);
-  await DataStore.save(
-    Order.copyOf(order, updated => {
-      updated.status = 'COMPLETE';
-      updated.actualMinutes = minutes;
-      updated.completedAt = new Date().toISOString();
-    })
-  );
-};
-```
-
-## User Management
-
-**Option 1: Shared account** (simplest)
-- One username/password for all workers
-
-**Option 2: Individual accounts**
-Create users via AWS Console or CLI:
 ```bash
-aws cognito-idp admin-create-user \
-  --user-pool-id xxx \
-  --username worker1 \
-  --temporary-password TempPass123!
+npx ampx generate outputs --stack <your-stack-name> --format json --out-dir .
 ```
 
-## Development Approach
+or:
 
-### Build locally first:
-```javascript
-// Just use regular React state initially
-const [orders, setOrders] = useState([]);
-
-const claimOrder = (orderId) => {
-  setOrders(orders.map(order => 
-    order.id === orderId 
-      ? {...order, status: 'IN_PROGRESS', assignedWorker: 'John'}
-      : order
-  ));
-};
+```bash
+npx ampx generate outputs --app-id <your-app-id> --branch <your-branch> --format json --out-dir .
 ```
 
-### Then swap in DataStore:
-```javascript
-// Same UI logic, just change data layer
-const claimOrder = async (orderId) => {
-  const order = await DataStore.query(Order, orderId);
-  await DataStore.save(
-    Order.copyOf(order, updated => {
-      updated.status = 'IN_PROGRESS';
-      updated.assignedWorker = 'John';
-    })
-  );
-};
+## Running locally
 
-// Orders auto-update via subscription
-useEffect(() => {
-  DataStore.observeQuery(Order).subscribe(snapshot => {
-    setOrders(snapshot.items);
-  });
-}, []);
+After `amplify_outputs.json` exists:
+
+```bash
+npm run dev
 ```
 
-## Why this works:
-- **DataStore API looks like normal state management** - query, save, delete
-- **Subscriptions auto-update your React state** - no manual sync logic needed
-- **All sync/conflict/offline handling is automatic** - happens behind the scenes
+Open the app on multiple machines, point them at the same deployed frontend, and set the same `teamId` in the header.
 
-## Suggested development path:
-1. Build complete UI with mock data
-2. Get all interactions working locally
-3. Add Amplify (`amplify init`, `amplify add api`)
-4. Replace setState calls with DataStore.save
-5. Replace local arrays with DataStore.query
-6. Add subscriptions for real-time updates
+## Operational notes
 
-The actual "networking" code is like 10 lines total. DataStore abstracts all the complexity.
+- Snapshot sync is fine for the current data size.
+- Very rapid concurrent edits can overwrite each other because the whole state is one document.
+- If that becomes a real problem, the next step is not a websocket server. The next step is splitting only the hot data paths, probably:
+  - `Order`
+  - `Inventory`
+  - `Transaction`
+  - `Schedule`
 
-## Offline Fallback
-DataStore automatically:
-- Caches all data locally in IndexedDB
-- Queues changes when offline
-- Syncs when connection restored
+## Current limitations
 
-## Manager Laptop Failure Recovery
-Any laptop can act as manager by accessing the same URL. All data is in cloud, nothing stored exclusively on manager device.
-
-## Performance
-- Initial sync: ~500ms for full dataset
-- Updates propagate: 200-300ms typical
-- Offline mode: Instant (local cache)
-
-## Conflict Resolution
-Using default "Auto Merge" - last write wins at field level. Good enough for 6 users with verbal communication.
-
-## Update Frequency & Rate Limits
-
-### Limits to be aware of:
-- **AppSync subscriptions**: ~100 updates/second per client
-- **Rapid updates**: Multiple updates/second to same object can cause conflicts
-- **Cost**: Each write operation costs money (DynamoDB write units)
-
-### Best practices:
-- **DON'T** update every second for timers/counters
-- **DO** track time locally, sync at meaningful events (start, pause, complete)
-- **DO** batch updates when possible (update every 10-30 seconds vs every second)
-- **DO** use optimistic UI updates (update local state immediately, sync in background)
-
-## State Management Options
-
-Since multiple components need order data, choose one:
-
-1. **Use DataStore as central store** (recommended)
-   - Components subscribe directly to DataStore
-   - No additional state management needed
-   - Single source of truth
-
-2. **React Context** for local state + DataStore for sync
-   - Useful if you need complex derived state
-   - More control over re-renders
-
-3. **Zustand** for local state + DataStore for sync
-   - Cleaner than Context
-   - Good for complex local state
-
-## Error Handling
-
-```javascript
-// Monitor connection status
-Hub.listen('datastore', (data) => {
-  if (data.payload.event === 'networkStatus') {
-    setIsOnline(data.payload.active);
-  }
-  if (data.payload.event === 'syncQueriesReady') {
-    setIsSynced(true);
-  }
-});
-
-// Handle sync errors
-DataStore.observe().subscribe({
-  error: (err) => {
-    console.error('Sync error:', err);
-    // Show user notification
-  }
-});
-```
-
-## Testing Sync Locally
-
-1. Open app in multiple browser tabs
-2. Use Chrome DevTools Network tab to simulate offline
-3. Make changes while offline
-4. Go back online and verify sync
-
-## Common Gotchas
-
-- **_version field**: Required for optimistic concurrency, don't manually modify
-- **ID generation**: Let DataStore generate IDs unless you need deterministic IDs
-- **Large datasets**: Use pagination with DataStore.query() for >1000 items
-- **Subscriptions**: Always unsubscribe in cleanup functions to prevent memory leaks
-- **Initial load**: First sync might be slow with lots of historical data - consider limiting initial query
+- Linting still fails in unrelated pre-existing files; build passes.
+- Sync depends on `amplify_outputs.json` being present at runtime.
+- Auth is intentionally simple right now and should be tightened before any sensitive use.

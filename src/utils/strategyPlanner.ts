@@ -100,8 +100,8 @@ export class Schedule {
   getOrders(): Order[] {
     const allOrders = gameState.getOrders();
     return this.orderIds
-      .map(id => allOrders.find(order => order.id === id))
-      .filter(order => order !== undefined) as Order[];
+      .map((id) => allOrders.find((order) => order.id === id))
+      .filter((order) => order !== undefined) as Order[];
   }
 
   /**
@@ -222,9 +222,9 @@ export class Schedule {
       // Calculate probability of success (completing before deadline)
       // Deadline is the time remaining from now until the order is due
       const now = Date.now();
-      const dueTime = order.orderTime + (order.leadTime * 60 * 1000); // leadTime in minutes to ms
+      const dueTime = order.orderTime + order.leadTime * 60 * 1000; // leadTime in minutes to ms
       const timeRemaining = Math.max(0, dueTime - now); // Time remaining in ms
-      
+
       const successProbability = probabilityLessThan(
         cumulativeTimeDistribution,
         timeRemaining,
@@ -257,7 +257,7 @@ export class Schedule {
     };
 
     // Update orderIds to match the sorted order
-    this.orderIds = sortedOrders.map(order => order.id);
+    this.orderIds = sortedOrders.map((order) => order.id);
     this.profitDistribution = profitDistribution;
 
     // Only calculate expected values at the end
@@ -274,8 +274,8 @@ export class Schedule {
   /**
    * Optimize order sequence for production
    */
-  optimizeOrderSequence(): void {
-    // Sort by: 1) Due date, 2) Paper color batching, 3) Size
+  sortOrderSequence(): void {
+    // Sort by: 1) Due date - earliest due date first, 2. time to complete the order TODO:
     const orders = this.getOrders();
     orders.sort((a: Order, b: Order) => {
       // First by due date
@@ -297,7 +297,7 @@ export class Schedule {
    * Calculate and update all schedule metrics
    */
   calculateAll(): void {
-    this.optimizeOrderSequence();
+    this.sortOrderSequence();
     this.getRequiredInventory();
     this.getScheduleCompletionTime();
     this.getScheduleEstimatedProfit();
@@ -347,7 +347,7 @@ export class ScheduleList {
    */
   getBest(): Schedule | null {
     if (!this.currentBest) return null;
-    return this.schedules.find(s => s.id === this.currentBest) || null;
+    return this.schedules.find((s) => s.id === this.currentBest) || null;
   }
 }
 

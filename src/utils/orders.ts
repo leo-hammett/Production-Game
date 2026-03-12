@@ -35,6 +35,108 @@ export const OCCASIONS = [
   "Silver Wedding",
 ]; // Must have the ability to add new occasions
 
+export const PRODUCTION_PIPELINE_STATUSES: OrderStatus[] = [
+  "ordered",
+  "pending_inventory",
+  "WIP",
+  "sent",
+  "approved",
+  "failed",
+];
+
+export const getProductionScheduleOrderIds = (orders: Order[]): string[] =>
+  orders
+    .filter((order) => PRODUCTION_PIPELINE_STATUSES.includes(order.status))
+    .map((order) => order.id);
+
+export const normalizeScheduleOrderIds = (
+  orders: Order[],
+  scheduleOrderIds: string[],
+): string[] => {
+  const activeOrderIds = getProductionScheduleOrderIds(orders);
+  const activeOrderIdSet = new Set(activeOrderIds);
+  const normalized = scheduleOrderIds.filter((orderId) =>
+    activeOrderIdSet.has(orderId),
+  );
+
+  activeOrderIds.forEach((orderId) => {
+    if (!normalized.includes(orderId)) {
+      normalized.push(orderId);
+    }
+  });
+
+  return normalized;
+};
+
+export const getScheduledProductionOrders = (
+  orders: Order[],
+  scheduleOrderIds: string[],
+): Order[] => {
+  const orderMap = new Map(orders.map((order) => [order.id, order]));
+
+  return normalizeScheduleOrderIds(orders, scheduleOrderIds)
+    .map((orderId) => orderMap.get(orderId))
+    .filter((order): order is Order => order !== undefined);
+};
+
+export const reorderScheduleOrderIds = (
+  scheduleOrderIds: string[],
+  draggedOrderId: string,
+  targetOrderId: string,
+  position: "before" | "after",
+): string[] => {
+  if (draggedOrderId === targetOrderId) {
+    return scheduleOrderIds;
+  }
+
+  const draggedIndex = scheduleOrderIds.indexOf(draggedOrderId);
+  const targetIndex = scheduleOrderIds.indexOf(targetOrderId);
+
+  if (draggedIndex === -1 || targetIndex === -1) {
+    return scheduleOrderIds;
+  }
+
+  const nextOrderIds = [...scheduleOrderIds];
+  nextOrderIds.splice(draggedIndex, 1);
+
+  let insertIndex = targetIndex + (position === "after" ? 1 : 0);
+  if (draggedIndex < insertIndex) {
+    insertIndex -= 1;
+  }
+
+  nextOrderIds.splice(insertIndex, 0, draggedOrderId);
+  return nextOrderIds;
+};
+
+export const reorderOrders = (
+  orders: Order[],
+  draggedOrderId: string,
+  targetOrderId: string,
+  position: "before" | "after",
+): Order[] => {
+  if (draggedOrderId === targetOrderId) {
+    return orders;
+  }
+
+  const draggedIndex = orders.findIndex((order) => order.id === draggedOrderId);
+  const targetIndex = orders.findIndex((order) => order.id === targetOrderId);
+
+  if (draggedIndex === -1 || targetIndex === -1) {
+    return orders;
+  }
+
+  const nextOrders = [...orders];
+  const [draggedOrder] = nextOrders.splice(draggedIndex, 1);
+
+  let insertIndex = targetIndex + (position === "after" ? 1 : 0);
+  if (draggedIndex < insertIndex) {
+    insertIndex -= 1;
+  }
+
+  nextOrders.splice(insertIndex, 0, draggedOrder);
+  return nextOrders;
+};
+
 // Add new order
 export const addOrder = (): Order => {
   // Default to white paper
@@ -95,8 +197,8 @@ export const updateOrder = (
     const oldStatus = order.status;
     const newStatus = value as OrderStatus;
     
-    // Calculate order revenue (price per unit * quantity)
-    const orderRevenue = order.price * order.quantity;
+    // `order.price` is the total order value, not a per-unit amount.
+    const orderRevenue = order.price;
     const failureFine = orderRevenue * FAILURE_FINE_RATIO;
     
     // If changing to failed status, add a fine transaction
@@ -106,7 +208,7 @@ export const updateOrder = (
         timestamp: new Date(),
         amount: -failureFine,
         type: "cash",
-        reason: `Order failure fine (${FAILURE_FINE_RATIO * 100}% of £${orderRevenue.toFixed(2)}): ${order.quantity}x ${order.occasion || 'cards'}`,
+        reason: `Order failure fine (${FAILURE_FINE_RATIO * 100}% of £${orderRevenue.toFixed(2)} total): ${order.quantity}x ${order.occasion || 'cards'}`,
         orderId: order.id,
       };
       setTransactions(prev => [...prev, fineTransaction]);
@@ -138,7 +240,7 @@ export const updateOrder = (
         timestamp: new Date(),
         amount: orderRevenue,
         type: "cash",
-        reason: `Order payment received: ${order.quantity}x ${order.occasion || 'cards'} @ £${order.price}/unit`,
+        reason: `Order payment received: ${order.quantity}x ${order.occasion || 'cards'} for £${orderRevenue.toFixed(2)} total`,
         orderId: order.id,
       };
       setTransactions(prev => [...prev, paymentTransaction]);
