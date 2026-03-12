@@ -34,7 +34,7 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
 
   const calculateTimers = (order: Order): OrderTimers => {
     const startTime = order.startTime || order.orderTime;
-    const dueTime = order.dueTime || (startTime + (order.leadTime * 24 * 60 * 60 * 1000)); // Convert days to ms
+    const dueTime = order.dueTime || (order.orderTime + (order.leadTime * 60 * 1000)); // leadTime in minutes to ms
     
     const timeUntilDue = dueTime - now;
     const totalTime = dueTime - startTime;
@@ -43,7 +43,7 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
     
     // Panic level calculation based on how early/late the order started
     // If we started late (less time than leadTime), panic increases
-    const idealStartTime = dueTime - (order.leadTime * 24 * 60 * 60 * 1000);
+    const idealStartTime = order.orderTime; // Ideal is to start immediately when order placed
     const startDelay = startTime - idealStartTime;
     const panicLevel = startDelay > 0 ? Math.min((startDelay / (24 * 60 * 60 * 1000)) * 20, 100) : 0;
     
@@ -114,15 +114,15 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
   };
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold text-gray-800">Production Schedule</h2>
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-gray-700">Production Schedule</h3>
       
       {productionOrders.length === 0 ? (
-        <div className="text-gray-500 italic p-4 bg-gray-50 rounded">
+        <div className="text-gray-500 italic p-2 bg-gray-50 rounded text-xs">
           No orders in production pipeline
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1">
           {productionOrders.map(order => {
             const timers = calculateTimers(order);
             const statusColor = getStatusColor(order, timers);
@@ -130,32 +130,32 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
             return (
               <div
                 key={order.id}
-                className={`p-4 rounded-lg border ${statusColor} transition-all duration-300`}
+                className={`p-2 rounded border ${statusColor} transition-all duration-300`}
               >
-                <div className="flex justify-between items-start mb-2">
+                <div className="flex justify-between items-start mb-1">
                   <div>
-                    <span className="font-mono text-xs opacity-60">ID: {order.id}</span>
-                    <h3 className="font-semibold">
-                      {order.quantity}x {order.occasion || 'Cards'} - {order.size}
-                    </h3>
-                    <div className="text-sm">
-                      Status: <span className="font-medium">{order.status}</span>
+                    <span className="font-mono text-xs opacity-60">{order.id.slice(-6)}</span>
+                    <div className="text-xs font-semibold">
+                      {order.quantity}x {order.occasion || 'Cards'}
+                    </div>
+                    <div className="text-xs">
+                      {order.status} • {order.size}
                     </div>
                   </div>
                   
                   <div className="text-right">
-                    <div className="text-lg font-bold">
+                    <div className="text-xs font-bold">
                       £{(order.price * order.quantity).toFixed(2)}
                     </div>
-                    <div className={`text-sm ${order.paperColor.cssClass} px-2 py-1 rounded inline-block`}>
+                    <div className={`text-xs ${order.paperColor.cssClass} px-1 py-0.5 rounded inline-block`}>
                       {order.paperColor.name}
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3 pt-3 border-t border-current border-opacity-20">
+                <div className="grid grid-cols-2 gap-1 mt-1 pt-1 border-t border-current border-opacity-20">
                   <div>
-                    <div className="text-xs opacity-60">Start Time</div>
+                    <div className="text-xs opacity-60">Start</div>
                     <input
                       type="datetime-local"
                       value={order.startTime ? new Date(order.startTime).toISOString().slice(0, 16) : ''}
@@ -163,27 +163,27 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
                         const newStartTime = new Date(e.target.value).getTime();
                         updateOrderField(order.id, 'startTime', newStartTime);
                         if (order.leadTime > 0) {
-                          updateOrderField(order.id, 'dueTime', newStartTime + (order.leadTime * 24 * 60 * 60 * 1000));
+                          updateOrderField(order.id, 'dueTime', order.orderTime + (order.leadTime * 60 * 1000)); // Due time based on original order time
                         }
                       }}
-                      className="text-xs px-1 py-0.5 border rounded bg-white bg-opacity-50"
+                      className="text-xs px-1 py-0.5 border rounded bg-white bg-opacity-50 w-full"
                     />
                   </div>
                   
                   <div>
-                    <div className="text-xs opacity-60">Time Until Due</div>
-                    <div className={`font-mono text-sm ${timers.isOverdue ? 'text-red-600 font-bold' : ''}`}>
+                    <div className="text-xs opacity-60">Due</div>
+                    <div className={`font-mono text-xs ${timers.isOverdue ? 'text-red-600 font-bold' : ''}`}>
                       {formatTime(timers.timeUntilDue)}
-                      {timers.isOverdue && ' OVERDUE'}
+                      {timers.isOverdue && ' OVR'}
                     </div>
                   </div>
                   
                   <div>
                     <div className="text-xs opacity-60">Progress</div>
                     <div className="flex items-center gap-1">
-                      <div className="flex-1 bg-gray-200 rounded-full h-2">
+                      <div className="flex-1 bg-gray-200 rounded-full h-1">
                         <div 
-                          className={`h-2 rounded-full transition-all duration-500 ${
+                          className={`h-1 rounded-full transition-all duration-500 ${
                             timers.isLate ? 'bg-red-500' : 'bg-blue-500'
                           }`}
                           style={{ width: `${Math.min(timers.estimatedProgress, 100)}%` }}
@@ -196,24 +196,17 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
                   </div>
                   
                   <div>
-                    <div className="text-xs opacity-60">Panic Level</div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-lg">{getPanicEmoji(timers.panicLevel)}</span>
-                      <span className="text-sm font-mono">{timers.panicLevel.toFixed(0)}%</span>
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <div className="text-xs opacity-60">Lead Time</div>
-                    <div className="text-sm">
-                      {order.leadTime === -1 ? '∞' : `${order.leadTime} days`}
+                    <div className="text-xs opacity-60">Panic</div>
+                    <div className="flex items-center gap-0.5">
+                      <span className="text-sm">{getPanicEmoji(timers.panicLevel)}</span>
+                      <span className="text-xs font-mono">{timers.panicLevel.toFixed(0)}%</span>
                     </div>
                   </div>
                 </div>
 
                 {timers.isLate && order.status === 'WIP' && (
-                  <div className="mt-2 p-2 bg-red-200 text-red-800 rounded text-sm font-medium animate-pulse">
-                    ⚠️ Order is behind schedule - Expected completion passed!
+                  <div className="mt-1 p-1 bg-red-200 text-red-800 rounded text-xs font-medium animate-pulse">
+                    ⚠️ Behind schedule!
                   </div>
                 )}
               </div>

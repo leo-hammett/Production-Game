@@ -32,11 +32,6 @@ export interface Station {
   itemProcesingTime: NormalDistribution; // Default/fallback distribution
   // Store distributions for different task sizes (e.g., "2": distribution for 2-line verse), right now this is not important given the lack of inputs for varying tasks.
   sizeDistributions: Map<number, NormalDistribution>;
-  // Capacity and constraints
-  batchCapacity: number; // Max units that can be processed simultaneously
-  setupTime: number; // Fixed setup time in SECONDS
-  // Current state
-  itemsLeftToProcessUntilIdle: number; // Estimate of items in progress
   speedMultiplier: number; // Speed override factor (default 1.0)
 
   // Method to generate distributions from raw times
@@ -169,7 +164,6 @@ export function calculateStationOccupationTimePerOrder(
   return {
     mean: 0,
     stdDev: 0,
-    variance: 0,
   };
 }
 

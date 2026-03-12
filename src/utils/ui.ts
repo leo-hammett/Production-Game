@@ -86,10 +86,10 @@ export const formatTime = (seconds: number) => {
 
 // Timer management functions
 export const startCooldownTimer = (
-  cooldownTimer: NodeJS.Timeout | null,
+  cooldownTimer: number | null,
   buyingCooldown: number,
   setBuyingCooldown: React.Dispatch<React.SetStateAction<number>>,
-  setCooldownTimer: React.Dispatch<React.SetStateAction<NodeJS.Timeout | null>>
+  setCooldownTimer: React.Dispatch<React.SetStateAction<number | null>>
 ) => {
   if (cooldownTimer) clearInterval(cooldownTimer);
   if (buyingCooldown === 0) setBuyingCooldown(300); // Default 5 minutes if starting from 0
@@ -107,8 +107,8 @@ export const startCooldownTimer = (
 };
 
 export const stopCooldownTimer = (
-  cooldownTimer: NodeJS.Timeout | null,
-  setCooldownTimer: React.Dispatch<React.SetStateAction<NodeJS.Timeout | null>>
+  cooldownTimer: number | null,
+  setCooldownTimer: React.Dispatch<React.SetStateAction<number | null>>
 ) => {
   if (cooldownTimer) {
     clearInterval(cooldownTimer);
@@ -117,8 +117,8 @@ export const stopCooldownTimer = (
 };
 
 export const resetCooldownTimer = (
-  cooldownTimer: NodeJS.Timeout | null,
-  setCooldownTimer: React.Dispatch<React.SetStateAction<NodeJS.Timeout | null>>,
+  cooldownTimer: number | null,
+  setCooldownTimer: React.Dispatch<React.SetStateAction<number | null>>,
   setBuyingCooldown: React.Dispatch<React.SetStateAction<number>>
 ) => {
   if (cooldownTimer) {
@@ -130,7 +130,7 @@ export const resetCooldownTimer = (
 
 export const updateCooldownTime = (
   newTime: number,
-  cooldownTimer: NodeJS.Timeout | null,
+  cooldownTimer: number | null,
   setBuyingCooldown: React.Dispatch<React.SetStateAction<number>>
 ) => {
   if (!cooldownTimer && newTime >= 0) {

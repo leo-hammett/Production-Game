@@ -107,7 +107,6 @@ export const updateOrder = (
         amount: -failureFine,
         type: "cash",
         reason: `Order failure fine (${FAILURE_FINE_RATIO * 100}% of £${orderRevenue.toFixed(2)}): ${order.quantity}x ${order.occasion || 'cards'}`,
-        affectsInventory: true, // Affects inventory as it's a business loss
         orderId: order.id,
       };
       setTransactions(prev => [...prev, fineTransaction]);
@@ -125,7 +124,6 @@ export const updateOrder = (
           amount: Math.abs(fineTransaction.amount),
           type: "cash",
           reason: `Order failure fine reversed: ${order.quantity}x ${order.occasion || 'cards'}`,
-          affectsInventory: true,
           orderId: order.id,
         };
         setTransactions(prev => [...prev, refundTransaction]);
@@ -141,7 +139,6 @@ export const updateOrder = (
         amount: orderRevenue,
         type: "cash",
         reason: `Order payment received: ${order.quantity}x ${order.occasion || 'cards'} @ £${order.price}/unit`,
-        affectsInventory: false, // This is revenue, not inventory
         orderId: order.id,
       };
       setTransactions(prev => [...prev, paymentTransaction]);
@@ -159,7 +156,6 @@ export const updateOrder = (
           amount: -paymentTransaction.amount,
           type: "cash",
           reason: `Order payment reversed: ${order.quantity}x ${order.occasion || 'cards'}`,
-          affectsInventory: false,
           orderId: order.id,
         };
         setTransactions(prev => [...prev, reversalTransaction]);
@@ -181,7 +177,7 @@ export const updateOrder = (
         updatedOrder.startTime = Date.now();
       }
       if (!updatedOrder.dueTime && updatedOrder.leadTime > 0) {
-        updatedOrder.dueTime = updatedOrder.startTime + (updatedOrder.leadTime * 24 * 60 * 60 * 1000);
+        updatedOrder.dueTime = updatedOrder.startTime + (updatedOrder.leadTime * 60 * 1000); // leadTime is in minutes
       }
     }
     

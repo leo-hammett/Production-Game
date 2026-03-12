@@ -70,7 +70,7 @@ export interface RequiredPapers {
  */
 export class Schedule {
   id: string;
-  orders: Order[]; // Orders in execution sequence
+  orderIds: string[]; // Order IDs in execution sequence (references to actual orders)
   scheduleTimeDistribution: NormalDistribution; // Time distribution for completion
   timeMarginDistribution: NormalDistribution; // Buffer time distribution - time we will be unable to do work
   profitDistribution: NormalDistribution; // Profit distribution accounting for risk
@@ -79,9 +79,9 @@ export class Schedule {
   expectedCompletionTime: number; // Mean of time distribution (calculated at end)
   profitPerHour: number; // Expected profit / expected time
 
-  constructor(id: string, orders: Order[] = []) {
+  constructor(id: string, orderIds: string[] = []) {
     this.id = id;
-    this.orders = orders;
+    this.orderIds = orderIds;
     this.scheduleTimeDistribution = { mean: 0, stdDev: 0 };
     this.timeMarginDistribution = { mean: 0, stdDev: 0 };
     this.profitDistribution = { mean: 0, stdDev: 0 };
@@ -92,15 +92,26 @@ export class Schedule {
   }
 
   /**
+   * Get the actual Order objects from gameState based on orderIds
+   */
+  getOrders(): Order[] {
+    const allOrders = gameState.getOrders();
+    return this.orderIds
+      .map(id => allOrders.find(order => order.id === id))
+      .filter(order => order !== undefined) as Order[];
+  }
+
+  /**
    * Get time distributions for each order in schedule
    */
   getOrderDistributions(): NormalDistribution[] {
     // TODO: Get from station calculations
     //TODO: MAKE THE GETTING FROM STATION CALCULATIONS
-    // For now, placeholder distributions
-    return this.orders.map((order) => ({
-      mean: order.quantity * 2, // 2 min per item
-      stdDev: order.quantity * 0.5,
+    // For now, placeholder distributions (in milliseconds)
+    const orders = this.getOrders();
+    return orders.map((order) => ({
+      mean: order.quantity * 2 * 60 * 1000, // 2 min per item converted to ms
+      stdDev: order.quantity * 0.5 * 60 * 1000, // converted to ms
     }));
   }
 
@@ -114,7 +125,8 @@ export class Schedule {
     const pendingOrders = gameState.getPendingOrders();
 
     // Calculate requirements by color
-    for (const order of this.orders) {
+    const orders = this.getOrders();
+    for (const order of orders) {
       const colorCode = order.paperColor.code;
 
       if (!required[colorCode]) {
@@ -174,9 +186,10 @@ export class Schedule {
    */
   getScheduleEstimatedProfit(): NormalDistribution {
     // Sort orders by due date (minimize lateness)
-    const sortedOrders = [...this.orders].sort((a, b) => {
-      const aDue = a.orderTime + a.leadTime * 60 * 60 * 1000; // Convert hours to ms
-      const bDue = b.orderTime + b.leadTime * 60 * 60 * 1000;
+    const orders = this.getOrders();
+    const sortedOrders = [...orders].sort((a, b) => {
+      const aDue = a.orderTime + a.leadTime * 60 * 1000; // Convert minutes to ms
+      const bDue = b.orderTime + b.leadTime * 60 * 1000;
       return aDue - bDue;
     });
 
@@ -204,10 +217,14 @@ export class Schedule {
       const fine = revenue * FAILURE_FINE_RATIO;
 
       // Calculate probability of success (completing before deadline)
-      const deadline = order.leadTime * 60; // Convert hours to minutes
+      // Deadline is the time remaining from now until the order is due
+      const now = Date.now();
+      const dueTime = order.orderTime + (order.leadTime * 60 * 1000); // leadTime in minutes to ms
+      const timeRemaining = Math.max(0, dueTime - now); // Time remaining in ms
+      
       const successProbability = probabilityLessThan(
         cumulativeTimeDistribution,
-        deadline,
+        timeRemaining,
       );
 
       // Expected value for this order
@@ -236,7 +253,8 @@ export class Schedule {
       stdDev: profitStdDev,
     };
 
-    this.orders = sortedOrders;
+    // Update orderIds to match the sorted order
+    this.orderIds = sortedOrders.map(order => order.id);
     this.profitDistribution = profitDistribution;
 
     // Only calculate expected values at the end
@@ -255,7 +273,8 @@ export class Schedule {
    */
   optimizeOrderSequence(): void {
     // Sort by: 1) Due date, 2) Paper color batching, 3) Size
-    this.orders.sort((a, b) => {
+    const orders = this.getOrders();
+    orders.sort((a: Order, b: Order) => {
       // First by due date
       const aDue = a.orderTime + a.leadTime * 3600000;
       const bDue = b.orderTime + b.leadTime * 3600000;

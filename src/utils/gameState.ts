@@ -1,4 +1,6 @@
 import { StationManager } from "./station";
+import { STANDARD_TIME_RATIO } from "./gameConstants";
+import { Schedule } from "./strategyPlanner";
 
 // Asset-related types (moved from assets.ts)
 export class PaperColor {
@@ -85,10 +87,12 @@ export interface GameParameters {
   workstationSpeed: number;
   safetyStock: number;
   buyingCooldown: number;
+  buyingCooldownEndTime: number | null; // Unix timestamp when cooldown ends (null = no cooldown)
   sellMarkdown: number;
   failureFineRatio: number;
   colourLoveMultiplier: number; // For demand-based pricing
   whiteLoveMultiplier: number; // For demand-based pricing
+  standardTimeRatio: number; // Contingency factor for worker breaks, etc. (normal time = observed time * this ratio)
 }
 
 // Global game state interface
@@ -99,6 +103,7 @@ export interface GameState {
   cash: number;
   parameters: GameParameters;
   stationManager: StationManager;
+  currentSchedule: Schedule; // Active production schedule
   // Game data that can be modified
   occasions: string[];
   paperColors: PaperColor[];
@@ -142,12 +147,15 @@ class GameStateManager {
         workstationSpeed: 1.0,
         safetyStock: 12,
         buyingCooldown: 0,
+        buyingCooldownEndTime: null,
         sellMarkdown: 0.7,
         failureFineRatio: 0.3,
         colourLoveMultiplier: 1.0,
         whiteLoveMultiplier: 1.0,
+        standardTimeRatio: STANDARD_TIME_RATIO,
       },
       stationManager: new StationManager(),
+      currentSchedule: new Schedule("current", []),
       occasions: [
         "Christmas",
         "New Year",
@@ -219,6 +227,10 @@ class GameStateManager {
 
   getStationManager(): StationManager {
     return this.state.stationManager;
+  }
+
+  getCurrentSchedule(): Schedule {
+    return this.state.currentSchedule;
   }
 
   getOccasions(): string[] {
@@ -379,6 +391,38 @@ class GameStateManager {
     this.notify();
   }
 
+  // Cooldown management
+  startBuyingCooldown(durationSeconds: number) {
+    const endTime = Date.now() + (durationSeconds * 1000);
+    this.state.parameters.buyingCooldownEndTime = endTime;
+    this.notify();
+  }
+
+  clearBuyingCooldown() {
+    this.state.parameters.buyingCooldownEndTime = null;
+    this.notify();
+  }
+
+  getBuyingCooldownRemaining(): number {
+    if (!this.state.parameters.buyingCooldownEndTime) return 0;
+    const remaining = this.state.parameters.buyingCooldownEndTime - Date.now();
+    return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
+  }
+
+  isBuyingOnCooldown(): boolean {
+    return this.getBuyingCooldownRemaining() > 0;
+  }
+
+  setCurrentSchedule(schedule: Schedule) {
+    this.state.currentSchedule = schedule;
+    this.notify();
+  }
+
+  updateScheduleOrderIds(orderIds: string[]) {
+    this.state.currentSchedule.orderIds = orderIds;
+    this.notify();
+  }
+
   // Utility methods
   addOrder(order: Order) {
     this.state.orders.push(order);
@@ -477,12 +521,15 @@ class GameStateManager {
         workstationSpeed: 1.0,
         safetyStock: 12,
         buyingCooldown: 0,
+        buyingCooldownEndTime: null,
         sellMarkdown: 0.7,
         failureFineRatio: 0.3,
         colourLoveMultiplier: 1.0,
         whiteLoveMultiplier: 1.0,
+        standardTimeRatio: STANDARD_TIME_RATIO,
       },
       stationManager: new StationManager(),
+      currentSchedule: new Schedule("current", []),
       occasions: [
         "Christmas",
         "New Year",

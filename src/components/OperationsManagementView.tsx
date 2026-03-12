@@ -1,21 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import "./App.css";
-import type {
-  Order,
-  OrderStatus,
-} from "./utils/gameState";
-import {
-  addOrder,
-  deleteRecentOrder,
-  updateOrder,
-} from "./utils/orders";
-import { ProductionSchedule } from "./components/ProductionSchedule";
-import { StationView } from "./components/StationView";
-import { OperationsManagementView } from "./components/OperationsManagementView";
-import type {
-  PaperInventory,
-  Transaction,
-} from "./utils/gameState";
+import { ProductionSchedule } from "./ProductionSchedule";
+import type { Order, OrderStatus, PaperInventory, Transaction } from "../utils/gameState";
 import {
   gameState,
   PaperColor,
@@ -24,7 +9,12 @@ import {
   OCCASIONS,
   getColorName,
   getColorPrice,
-} from "./utils/gameState";
+} from "../utils/gameState";
+import {
+  addOrder,
+  deleteRecentOrder,
+  updateOrder,
+} from "../utils/orders";
 import {
   fuzzySearch,
   getColorClass,
@@ -32,41 +22,64 @@ import {
   formatOrderTime,
   getStatusColor,
   formatTime,
-} from "./utils/ui";
+  startCooldownTimer,
+  stopCooldownTimer,
+  resetCooldownTimer,
+  updateCooldownTime,
+} from "../utils/ui";
 
-type ViewType = "operations" | "station1" | "station2" | "station3";
+interface OperationsManagementViewProps {
+  orders: Order[];
+  setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
+  updateOrderField: (id: string, field: keyof Order, value: any) => void;
+  currentTime: number;
+  paperInventory: PaperInventory;
+  setPaperInventory: React.Dispatch<React.SetStateAction<PaperInventory>>;
+  transactions: Transaction[];
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  cash: number;
+  setCash: React.Dispatch<React.SetStateAction<number>>;
+  safetyStock: number;
+  setSafetyStock: React.Dispatch<React.SetStateAction<number>>;
+  buyingCooldown: number;
+  setBuyingCooldown: React.Dispatch<React.SetStateAction<number>>;
+  cooldownTimer: number | null;
+  setCooldownTimer: React.Dispatch<React.SetStateAction<number | null>>;
+  workstationSpeed: number;
+  setWorkstationSpeed: React.Dispatch<React.SetStateAction<number>>;
+}
 
-function App() {
-  // View state
-  const [currentView, setCurrentView] = useState<ViewType>("operations");
-  
+export function OperationsManagementView({
+  orders,
+  setOrders,
+  updateOrderField,
+  currentTime,
+  paperInventory,
+  setPaperInventory,
+  transactions,
+  setTransactions,
+  cash,
+  setCash,
+  safetyStock,
+  setSafetyStock,
+  buyingCooldown,
+  setBuyingCooldown,
+  cooldownTimer,
+  setCooldownTimer,
+  workstationSpeed,
+  setWorkstationSpeed,
+}: OperationsManagementViewProps) {
   // Resizable panes state
   const [leftPaneWidth, setLeftPaneWidth] = useState(70); // percentage
   const [isDragging, setIsDragging] = useState(false);
   const dividerRef = useRef<HTMLDivElement>(null);
 
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: "1",
-      orderTime: Date.now(),
-      quantity: 12,
-      leadTime: 15,
-      paperColor: PAPER_COLOR_MAP.get("w")!,  // White paper as default
-      size: "A5",
-      verseSize: 4,
-      occasion: "Birthday",
-      price: 0,
-      available: true,
-      status: "passive",
-    },
-  ]); //can someone update this comment to tell me if we need to pre-populate these values, I'd much rather leave some of them blank.
-
+  const [showUndo, setShowUndo] = useState(false);
+  const [previousOrders, setPreviousOrders] = useState<Order[]>([]);
   const [occasionSearch, setOccasionSearch] = useState("");
   const [filteredOccasions, setFilteredOccasions] = useState<string[]>([]);
   const [activeOccasionIndex, setActiveOccasionIndex] = useState(-1);
-  const occasionInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
-    {},
-  );
+  const occasionInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const [activeColorIndex, setActiveColorIndex] = useState(-1);
   const [colorSearch, setColorSearch] = useState("");
@@ -75,43 +88,24 @@ function App() {
   const [newColorName, setNewColorName] = useState("");
   const [newColorPrice, setNewColorPrice] = useState(20);
   const [pendingColorOrderId, setPendingColorOrderId] = useState<string | null>(null);
-
-  // Inventory Management State - the game starts with nothing, then we will manually buy
-  const [paperInventory, setPaperInventory] = useState<PaperInventory>({
-    w: 0,
-    g: 0,
-    p: 0,
-    y: 0,
-    b: 0,
-    s: 0,
-  });
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [cash, setCash] = useState(0); // Game starts with no cash
-  const [safetyStock, setSafetyStock] = useState(12);
-  const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
-  const [currentTime, setCurrentTime] = useState(Date.now());
-
-
-  // Update order
-  const updateOrderField = (id: string, field: keyof Order, value: any) => {
-    const updatedOrders = updateOrder(
-      orders,
-      id,
-      field,
-      value,
-      transactions,
-      cash,
-      setTransactions,
-      setCash
-    );
-    setOrders(updatedOrders);
-  };
 
   // Accept suggestions
   const acceptSuggestions = () => {
+    setPreviousOrders(orders);
     // Backend integration would go here
-    console.log('Suggestions accepted');
+    // For now, just simulate accepting suggestions
+    setShowUndo(true);
+    setTimeout(() => setShowUndo(false), 5000);
+  };
+
+  // Undo last action
+  const undoLastAction = () => {
+    if (previousOrders.length > 0) {
+      setOrders(previousOrders);
+      setPreviousOrders([]);
+      setShowUndo(false);
+    }
   };
 
   // Handle pane resizing
@@ -140,76 +134,6 @@ function App() {
       document.body.style.userSelect = "";
     };
   }, [isDragging]);
-
-  // Sync local state with gameState singleton
-  useEffect(() => {
-    gameState.setCash(cash);
-  }, [cash]);
-
-  useEffect(() => {
-    gameState.setPaperInventory(paperInventory);
-  }, [paperInventory]);
-
-  useEffect(() => {
-    gameState.setTransactions(transactions);
-  }, [transactions]);
-
-  useEffect(() => {
-    gameState.updateParameters({
-      workstationSpeed,
-      safetyStock,
-    });
-  }, [workstationSpeed, safetyStock]);
-
-  // Timer for pending transactions countdown
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(Date.now());
-      
-      // Check for completed pending transactions
-      transactions.forEach(trans => {
-        if (trans.pending && trans.arrivalTime && Date.now() >= trans.arrivalTime) {
-          completePendingTransaction(trans.id);
-        }
-      });
-    }, 1000);
-    
-    return () => clearInterval(timer);
-  }, [transactions]);
-
-  // Warning before leaving the page
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = 'You have unsaved game data. Are you sure you want to leave?';
-      return 'You have unsaved game data. Are you sure you want to leave?';
-    };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+N: Add new order
-      if (e.ctrlKey && e.key === "n") {
-        e.preventDefault();
-        const newOrder = addOrder();
-        setOrders([...orders, newOrder]);
-      }
-      // Ctrl+Z: Delete newest passive order with confirmation
-      if (e.ctrlKey && e.key === "z") {
-        e.preventDefault();
-        const newestPassive = orders.find(o => o.status === "passive");
-        if (newestPassive && confirm("Delete the newest passive order?")) {
-          setOrders(deleteRecentOrder(orders));
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [orders]);
 
   // Statistics calculations (skeleton for backend)
   const stats = {
@@ -346,88 +270,9 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-gray-100">
-      {/* Cash Metrics Header Bar */}
-      <div className="bg-gray-900 text-white p-2 border-b border-gray-700 sticky top-0 z-40">
-        <div className="flex justify-between items-center">
-          <div className="flex gap-6">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Cash:</span>
-              <span className="text-sm font-bold text-green-400">
-                £{cash.toFixed(2)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Net Worth:</span>
-              <span className="text-sm font-bold text-blue-400">
-                £{gameState.calculateNetWorth().toFixed(2)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Profit:</span>
-              <span
-                className={`text-sm font-bold ${gameState.calculateProfit() >= 0 ? "text-green-400" : "text-red-400"}`}
-              >
-                £{gameState.calculateProfit().toFixed(2)}
-              </span>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            {/* Navigation Buttons */}
-            <div className="flex gap-2">
-              <button 
-                onClick={() => setCurrentView("operations")}
-                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                  currentView === "operations" 
-                    ? "bg-blue-600 hover:bg-blue-700 text-white" 
-                    : "bg-gray-700 hover:bg-gray-600 text-white"
-                }`}>
-                Operations Management
-              </button>
-              <button 
-                onClick={() => setCurrentView("station1")}
-                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                  currentView === "station1" 
-                    ? "bg-blue-600 hover:bg-blue-700 text-white" 
-                    : "bg-gray-700 hover:bg-gray-600 text-white"
-                }`}>
-                Station 1
-              </button>
-              <button 
-                onClick={() => setCurrentView("station2")}
-                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                  currentView === "station2" 
-                    ? "bg-blue-600 hover:bg-blue-700 text-white" 
-                    : "bg-gray-700 hover:bg-gray-600 text-white"
-                }`}>
-                Station 2
-              </button>
-              <button 
-                onClick={() => setCurrentView("station3")}
-                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                  currentView === "station3" 
-                    ? "bg-blue-600 hover:bg-blue-700 text-white" 
-                    : "bg-gray-700 hover:bg-gray-600 text-white"
-                }`}>
-                Station 3
-              </button>
-            </div>
-            
-            {gameState.getBuyingCooldownRemaining() > 0 && (
-              <div className="flex items-center gap-2 border-l border-gray-600 pl-4">
-                <span className="text-xs text-yellow-400">Buying Cooldown:</span>
-                <span className="text-sm font-mono">
-                  {formatTime(gameState.getBuyingCooldownRemaining())}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
+    <>
       {/* Two-pane section */}
-      <div className="flex relative">
+      <div className="flex relative h-full">
         {/* Left Pane - Order Management */}
         <div
           className="bg-white border-r border-gray-300"
@@ -547,11 +392,10 @@ function App() {
                         <input
                           ref={(el) => (colorInputRefs.current[order.id] = el)}
                           type="text"
-                          value={activeColorIndex === index && colorSearch !== "" ? colorSearch : order.paperColor.name}
+                          value={order.paperColor.name}
                           onChange={(e) => {
                             const value = e.target.value;
                             setColorSearch(value);
-                            setActiveColorIndex(index);
                             setFilteredColors(
                               fuzzySearch(
                                 value,
@@ -569,20 +413,17 @@ function App() {
                                 "paperColor",
                                 exactMatch,
                               );
-                              setColorSearch("");
-                              setActiveColorIndex(-1);
-                              setFilteredColors([]);
                             }
                           }}
                           onFocus={(e) => {
-                            setColorSearch("");
-                            setActiveColorIndex(index);
+                            setColorSearch(e.target.value);
                             setFilteredColors(
                               fuzzySearch(
-                                "",
+                                e.target.value,
                                 PAPER_COLORS.map((c) => c.name),
                               ),
                             );
+                            setActiveColorIndex(index);
                           }}
                           onBlur={() => {
                             // Check if user typed something that doesn't exist
@@ -609,36 +450,18 @@ function App() {
                               const topMatch = PAPER_COLORS.find(c => c.name === filteredColors[0]);
                               if (topMatch) {
                                 updateOrderField(order.id, "paperColor", topMatch);
-                                setColorSearch("");
-                                setActiveColorIndex(-1);
-                                setFilteredColors([]);
                               }
-                            } else if (e.key === 'Enter') {
-                              if (filteredColors.length > 0) {
-                                // Select the first match on Enter
-                                const topMatch = PAPER_COLORS.find(c => c.name === filteredColors[0]);
-                                if (topMatch) {
-                                  updateOrderField(order.id, "paperColor", topMatch);
-                                  setColorSearch("");
-                                  setActiveColorIndex(-1);
-                                  setFilteredColors([]);
-                                }
-                              } else if (colorSearch && filteredColors.length === 0) {
-                                // Enter with no matches - prompt to create new color
-                                e.preventDefault();
-                                const exactMatch = PAPER_COLORS.find(
-                                  (c) => c.name.toLowerCase() === colorSearch.toLowerCase()
-                                );
-                                if (!exactMatch) {
-                                  setNewColorName(colorSearch);
-                                  setPendingColorOrderId(order.id);
-                                  setShowNewColorDialog(true);
-                                }
+                            } else if (e.key === 'Enter' && colorSearch && filteredColors.length === 0) {
+                              // Enter with no matches - prompt to create new color
+                              e.preventDefault();
+                              const exactMatch = PAPER_COLORS.find(
+                                (c) => c.name.toLowerCase() === colorSearch.toLowerCase()
+                              );
+                              if (!exactMatch) {
+                                setNewColorName(colorSearch);
+                                setPendingColorOrderId(order.id);
+                                setShowNewColorDialog(true);
                               }
-                            } else if (e.key === 'Escape') {
-                              setColorSearch("");
-                              setActiveColorIndex(-1);
-                              setFilteredColors([]);
                             }
                           }}
                           className={`w-full px-1 py-1.5 border rounded text-xs h-8 ${getColorClass(order.paperColor)}`}
@@ -906,7 +729,6 @@ function App() {
               </div>
             </div>
 
-
             {/* Statistics Comparison Table */}
             <div className="mb-1">
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
@@ -989,17 +811,27 @@ function App() {
               </div>
             </div>
 
-            {/* Accept Button */}
+            {/* Accept/Undo Button */}
             <div className="flex justify-center pb-2">
-              <button
-                onClick={acceptSuggestions}
-                className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs font-medium"
-              >
-                ✓ Accept Suggestions
-              </button>
+              {showUndo ? (
+                <button
+                  onClick={undoLastAction}
+                  className="px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors text-xs font-medium"
+                >
+                  ↶ Undo Last Action (Ctrl+Z)
+                </button>
+              ) : (
+                <button
+                  onClick={acceptSuggestions}
+                  className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs font-medium"
+                >
+                  ✓ Accept Suggestions
+                </button>
+              )}
             </div>
           </div>
         </div>
+
         {/* Draggable Divider */}
         <div
           ref={dividerRef}
@@ -1420,7 +1252,7 @@ function App() {
 
                       // Create pending transaction for paper purchases
                       addTransaction(cost, reason, "paper", colorMatch.code, qty, undefined, true, deliveryMs);
-                      gameState.startBuyingCooldown(300); // 5 minute cooldown
+                      startCooldownTimer(cooldownTimer, buyingCooldown, setBuyingCooldown, setCooldownTimer);
 
                       // Clear form
                       (
@@ -1455,29 +1287,46 @@ function App() {
                     <span className="text-xs">Cooldown:</span>
                     <button
                       onClick={() => {
-                        if (gameState.isBuyingOnCooldown()) {
-                          gameState.clearBuyingCooldown();
+                        if (cooldownTimer) {
+                          stopCooldownTimer(cooldownTimer, setCooldownTimer);
                         } else {
-                          gameState.startBuyingCooldown(300); // 5 minute cooldown
+                          startCooldownTimer(cooldownTimer, buyingCooldown, setBuyingCooldown, setCooldownTimer);
                         }
                       }}
                       className={`px-2 py-0.5 rounded text-xs font-medium ${
-                        gameState.isBuyingOnCooldown()
+                        cooldownTimer
                           ? "bg-red-500 hover:bg-red-600 text-white"
                           : "bg-green-500 hover:bg-green-600 text-white"
                       }`}
                     >
-                      {gameState.isBuyingOnCooldown() ? "Stop" : "Start"}
+                      {cooldownTimer ? "Stop" : "Start"}
                     </button>
                     <button
-                      onClick={() => gameState.clearBuyingCooldown()}
+                      onClick={() => resetCooldownTimer(cooldownTimer, setCooldownTimer, setBuyingCooldown)}
                       className="px-2 py-0.5 bg-gray-500 hover:bg-gray-600 text-white rounded text-xs"
                     >
                       Reset
                     </button>
-                    <span className="text-xs font-mono w-12 text-center">
-                      {formatTime(gameState.getBuyingCooldownRemaining())}
-                    </span>
+                    {!cooldownTimer ? (
+                      <input
+                        type="text"
+                        value={formatTime(buyingCooldown)}
+                        onChange={(e) => {
+                          const parts = e.target.value.split(":");
+                          if (parts.length === 2) {
+                            const mins = parseInt(parts[0]) || 0;
+                            const secs = parseInt(parts[1]) || 0;
+                            updateCooldownTime(mins * 60 + secs, cooldownTimer, setBuyingCooldown);
+                          }
+                        }}
+                        className="w-12 px-1 py-0.5 border rounded text-xs font-mono text-center"
+                        placeholder="0:00"
+                      />
+                    ) : (
+                      <span className="text-xs font-mono w-12 text-center">
+                        {formatTime(buyingCooldown)}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs">Safety Stock:</span>
@@ -1618,8 +1467,6 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
-
-export default App;
