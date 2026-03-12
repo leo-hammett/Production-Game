@@ -200,6 +200,9 @@ function App() {
   const [showNewColorDialog, setShowNewColorDialog] = useState(false);
   const [newColorName, setNewColorName] = useState("");
   const [newColorPrice, setNewColorPrice] = useState(20);
+  const [leadTimeDrafts, setLeadTimeDrafts] = useState<Record<string, string>>(
+    {},
+  );
   const [pendingColorOrderId, setPendingColorOrderId] = useState<string | null>(null);
   const [pendingQuantityFocusOrderId, setPendingQuantityFocusOrderId] =
     useState<string | null>(null);
@@ -339,6 +342,28 @@ function App() {
       ...currentMultipliers,
       [stationKey]: nextValue,
     }));
+  };
+
+  const commitLeadTimeDraft = (order: Order) => {
+    const draftValue = leadTimeDrafts[order.id];
+    if (draftValue === undefined) {
+      return;
+    }
+
+    const trimmedValue = draftValue.trim();
+    const nextLeadTime =
+      trimmedValue === "" ? -1 : parseInt(trimmedValue, 10);
+
+    updateOrderField(
+      order.id,
+      "leadTime",
+      Number.isFinite(nextLeadTime) ? nextLeadTime : order.leadTime,
+    );
+
+    setLeadTimeDrafts((currentDrafts) => {
+      const { [order.id]: _removed, ...remainingDrafts } = currentDrafts;
+      return remainingDrafts;
+    });
   };
 
   const createPaperPurchaseTransactions = (
@@ -1250,14 +1275,30 @@ function App() {
                       <td className="px-2 py-1">
                         <input
                           type="text"
-                          value={order.leadTime}
-                          onChange={(e) =>
-                            updateOrderField(
-                              order.id,
-                              "leadTime",
-                              parseInt(e.target.value) || -1,
-                            )
+                          value={
+                            leadTimeDrafts[order.id] ??
+                            (order.leadTime < 0 ? "" : String(order.leadTime))
                           }
+                          onChange={(e) =>
+                            setLeadTimeDrafts((currentDrafts) => ({
+                              ...currentDrafts,
+                              [order.id]: e.target.value,
+                            }))
+                          }
+                          onFocus={() =>
+                            setLeadTimeDrafts((currentDrafts) => ({
+                              ...currentDrafts,
+                              [order.id]:
+                                currentDrafts[order.id] ??
+                                (order.leadTime < 0 ? "" : String(order.leadTime)),
+                            }))
+                          }
+                          onBlur={() => commitLeadTimeDraft(order)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.currentTarget.blur();
+                            }
+                          }}
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="∞"
                         />
