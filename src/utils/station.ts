@@ -27,16 +27,19 @@ export interface Station {
   id: string;
   name: string;
   // Processing time parameters (in SECONDS per unit)
-  rawStationTaskTimes: RawStationTaskTime[]; //Is this how we do a varying list length in typescript?
-  itemProcesingTime: NormalDistribution;
+  rawStationTaskTimes: RawStationTaskTime[];
+  itemProcesingTime: NormalDistribution; // Default/fallback distribution
+  // Store distributions for different task sizes (e.g., "2": distribution for 2-line verse), right now this is not important given the lack of inputs for varying tasks.
+  sizeDistributions: Map<number, NormalDistribution>;
   // Capacity and constraints
   batchCapacity: number; // Max units that can be processed simultaneously
-  setupTime: number; // Fixed setup time in SECONDS (probably redundant)
+  setupTime: number; // Fixed setup time in SECONDS
   // Current state
-  itemsLeftToProcessUntilIdle: number; //Estimate of course...
+  itemsLeftToProcessUntilIdle: number; // Estimate of items in progress
   speedMultiplier: number; // Speed override factor (default 1.0)
 
-  generateStationProcessingTimes CLAUDE PLS MAKER THIS INTO A FUCNTION, INPUT IS RAW TASK TIMES AND GAMESTATE needs to have the standardTimeRatio which we must fetch, then for each size we have RawStationTaskTimes for we should make a distribution for and add it to a dictionary for future fetching, generateStationProcessingTimes should also return the distribution
+  // Method to generate distributions from raw times
+  generateProcessingTimes: () => Map<number, NormalDistribution>;
 }
 
 // Station configuration for different product sizes, based on the station this will vary.
@@ -51,6 +54,73 @@ export interface StationSizeConfig {
   };
 }
 
+/**
+ * Generate processing time distributions from raw observed times
+ * @param rawTimes - Array of observed task times
+ * @param standardTimeRatio - Ratio from gameState for normalizing times
+ * @returns Map of distributions by task size
+ */
+export function generateStationProcessingTimes(
+  rawTimes: RawStationTaskTime[],
+  standardTimeRatio: number = 1.23, //TODO: Make this an adjustable parameter //The standard time is like contingency for workers breaks and so on..
+): Map<number, NormalDistribution> {
+  const distributions = new Map<number, NormalDistribution>();
+
+  // Group raw times by task size. What we are meant to do is widen the variance down if there's a lot of items processed in one recording, and divide the mean time. Like un-central limit theorem.
+  const timesBySize = new Map<number, RawStationTaskTime[]>();
+
+  for (const rawTime of rawTimes) {
+    const size = rawTime.taskSize;
+    if (!timesBySize.has(size)) {
+      timesBySize.set(size, []);
+    }
+    timesBySize.get(size)!.push(rawTime);
+  }
+
+  // Calculate distribution for each size
+  for (const [size, times] of timesBySize) {
+    if (times.length === 0) continue;
+
+    // Normalize times to per-item basis accounting for employee performance
+    const normalizedTimes = times.map((t) => {
+      // Adjust for employee performance (they're faster during timing)
+      const adjustedTime = t.observedTimeTaken / t.employeePerformance;
+      // Convert to per-item time
+      const perItemTime = adjustedTime / t.numberOfItems;
+      // Apply standard time ratio from game state
+      return perItemTime * standardTimeRatio;
+    });
+
+    // Calculate mean
+    const mean =
+      normalizedTimes.reduce((sum, t) => sum + t, 0) / normalizedTimes.length;
+
+    // Calculate standard deviation
+    const variance =
+      normalizedTimes.reduce((sum, t) => sum + Math.pow(t - mean, 2), 0) /
+      normalizedTimes.length;
+    const stdDev = Math.sqrt(variance);
+
+    distributions.set(size, {
+      mean,
+      stdDev,
+    });
+  }
+
+  // Interpolate missing sizes if we have neighbors
+  // For example, if we have size 2 and 6 but not 4:
+  if (!distributions.has(4) && distributions.has(2) && distributions.has(6)) {
+    const dist2 = distributions.get(2)!;
+    const dist6 = distributions.get(6)!;
+    distributions.set(4, {
+      mean: (dist2.mean + dist6.mean) / 2,
+      stdDev: (dist2.stdDev + dist6.stdDev) / 2,
+    });
+  }
+
+  return distributions;
+}
+
 // Station collection/manager class
 export class StationManager {
   private stations: Map<string, Station>;
@@ -62,11 +132,29 @@ export class StationManager {
 
   private initializeDefaultStations(): void {
     // TODO: Add your default station configurations here
-    // Example (times in SECONDS):
-    // this.stations.set("cutting", {
-    // PUT IN DEFAULT VALUES FOR EACH STATION
-    // });
-    // can we populate these stations...
+    // Example station with method implementation:
+    const exampleStation: Station = {
+      id: "station1_cutting",
+      name: "Cutting Station",
+      rawStationTaskTimes: [],
+      itemProcesingTime: { mean: 30, stdDev: 5 }, // Default 30 sec per item
+      sizeDistributions: new Map(),
+      batchCapacity: 10,
+      setupTime: 60,
+      itemsLeftToProcessUntilIdle: 0,
+      speedMultiplier: 1.0,
+      generateProcessingTimes: function () {
+        // Get standard time ratio from gameState when called
+        const standardTimeRatio = 1.0; // TODO: get from gameState.getParameters().standardTimeRatio
+        this.sizeDistributions = generateStationProcessingTimes(
+          this.rawStationTaskTimes,
+          standardTimeRatio,
+        );
+        return this.sizeDistributions;
+      },
+    };
+
+    // this.stations.set("station1_cutting", exampleStation);
   }
 
   getStation(id: string): Station | undefined {
@@ -104,15 +192,39 @@ export function calculateStationOccupationTimePerOrder(
 export function calculateStationItemTimeDistribution(
   station: Station,
   order: Order,
-  speedMultiplier: number,
 ): NormalDistribution {
-  // This function is for a single item in an order
-  // TODO: Calculate processing time distribution for one item
-  // Include handover time distribution
+  // Determine the task size based on order properties and station type
+  let taskSize: number;
 
+  // Different stations care about different sizes
+  if (station.id.includes("verse") || station.id.includes("writing")) {
+    taskSize = order.verseSize; // 2, 4, or 6 lines
+  } else if (station.id.includes("fold") || station.id.includes("cut")) {
+    // Map paper sizes to complexity/fold counts
+    const sizeMap: { [key: string]: number } = {
+      A5: 1,
+      A6: 2,
+      A7: 3,
+    };
+    taskSize = sizeMap[order.size] || 1;
+  } else {
+    // Default task size
+    taskSize = 1;
+  }
+
+  // Get the distribution for this task size
+  let distribution: NormalDistribution;
+  if (station.sizeDistributions?.has(taskSize)) {
+    distribution = station.sizeDistributions.get(taskSize)!;
+  } else {
+    // Fallback to base distribution
+    distribution = station.itemProcesingTime;
+  }
+
+  // Apply station's speed multiplier
   return {
-    mean: 0,
-    stdDev: 0,
+    mean: distribution.mean / station.speedMultiplier,
+    stdDev: distribution.stdDev / station.speedMultiplier,
   };
 }
 
