@@ -38,6 +38,18 @@ export interface Station {
   generateProcessingTimes: () => Map<number, NormalDistribution>;
 }
 
+export interface StationSpeedMultipliers {
+  station1: number;
+  station2: number;
+  station3: number;
+}
+
+export const DEFAULT_STATION_SPEED_MULTIPLIERS: StationSpeedMultipliers = {
+  station1: 1,
+  station2: 1,
+  station3: 1,
+};
+
 // Station configuration for different product sizes, based on the station this will vary.
 // Paper will have sizes 1,2,3 based on fold count.
 // Verses will have 2,4,6 based on number of verses etc etc. WE MAY CHANGE THIS IF 4 lines not double 2?
@@ -146,6 +158,40 @@ export class StationManager {
 
   addStation(station: Station): void {
     this.stations.set(station.id, station);
+  }
+
+  setStationSpeedMultiplier(stationId: string, speedMultiplier: number): void {
+    const station = this.stations.get(stationId);
+    if (!station) {
+      return;
+    }
+
+    station.speedMultiplier = speedMultiplier;
+  }
+
+  getStationSpeedMultipliers(): StationSpeedMultipliers {
+    return {
+      station1: this.stations.get("station1_folding")?.speedMultiplier ?? 1,
+      station2: this.stations.get("station2_stencilling")?.speedMultiplier ?? 1,
+      station3: this.stations.get("station3_writing")?.speedMultiplier ?? 1,
+    };
+  }
+
+  applyStationSpeedMultipliers(
+    speedMultipliers: Partial<StationSpeedMultipliers>,
+  ): void {
+    if (speedMultipliers.station1 !== undefined) {
+      this.setStationSpeedMultiplier("station1_folding", speedMultipliers.station1);
+    }
+    if (speedMultipliers.station2 !== undefined) {
+      this.setStationSpeedMultiplier(
+        "station2_stencilling",
+        speedMultipliers.station2,
+      );
+    }
+    if (speedMultipliers.station3 !== undefined) {
+      this.setStationSpeedMultiplier("station3_writing", speedMultipliers.station3);
+    }
   }
 }
 

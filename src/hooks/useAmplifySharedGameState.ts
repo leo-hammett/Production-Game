@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { generateClient } from "aws-amplify/data";
 import type { Schema } from "../../amplify/data/resource";
 import { gameState, type Order, type PaperInventory, type Transaction } from "../utils/gameState";
+import type { StationSpeedMultipliers } from "../utils/station";
 import { configureAmplify } from "../utils/amplifyConfig";
 import {
   SHARED_GAME_SCHEMA_VERSION,
@@ -12,12 +13,8 @@ import {
   type SharedGameSnapshot,
 } from "../utils/sharedGameState";
 
-const client = generateClient<Schema>();
 const SAVE_DEBOUNCE_MS = 500;
-
-function getSharedGameStateModel() {
-  return client.models?.SharedGameState;
-}
+const PERSIST_FAILURE_BACKOFF_MS = 1_000;
 
 export type SyncState =
   | "configuring"
@@ -46,6 +43,10 @@ interface AmplifySharedGameStateBindings {
   setSafetyStock: React.Dispatch<React.SetStateAction<number>>;
   workstationSpeed: number;
   setWorkstationSpeed: React.Dispatch<React.SetStateAction<number>>;
+  stationSpeedMultipliers: StationSpeedMultipliers;
+  setStationSpeedMultipliers: React.Dispatch<
+    React.SetStateAction<StationSpeedMultipliers>
+  >;
 }
 
 export function useAmplifySharedGameState(
@@ -59,10 +60,13 @@ export function useAmplifySharedGameState(
   const [syncVersion, setSyncVersion] = useState(0);
 
   const clientIdRef = useRef(crypto.randomUUID());
+  const clientRef = useRef<ReturnType<typeof generateClient<Schema>> | null>(null);
   const initializedRef = useRef(false);
   const skipPersistRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistBlockedUntilRef = useRef(0);
+  const lastFailedSerializedRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +84,7 @@ export function useAmplifySharedGameState(
         return;
       }
 
+      clientRef.current = generateClient<Schema>();
       setIsConfigured(true);
       setSyncStatus({
         state: "connecting",
@@ -118,6 +123,9 @@ export function useAmplifySharedGameState(
       bindings.setCash(nextState.cash);
       bindings.setSafetyStock(nextState.parameters.safetyStock);
       bindings.setWorkstationSpeed(nextState.parameters.workstationSpeed);
+      bindings.setStationSpeedMultipliers(
+        nextState.parameters.stationSpeedMultipliers,
+      );
 
       initializedRef.current = true;
       setSyncStatus({
@@ -129,7 +137,7 @@ export function useAmplifySharedGameState(
 
   const persistSnapshot = useEffectEvent(
     async (snapshot: SharedGameSnapshot, serialized: string) => {
-      const sharedGameStateModel = getSharedGameStateModel();
+      const sharedGameStateModel = clientRef.current?.models?.SharedGameState;
       if (!sharedGameStateModel) {
         setSyncStatus({
           state: "disabled",
@@ -150,7 +158,7 @@ export function useAmplifySharedGameState(
       const revision = (existing.data?.revision ?? 0) + 1;
       const payload = {
         teamId: snapshot.teamId,
-        snapshot,
+        snapshot: JSON.stringify(snapshot),
         revision,
         schemaVersion: SHARED_GAME_SCHEMA_VERSION,
         updatedAtClient: new Date().toISOString(),
@@ -167,6 +175,8 @@ export function useAmplifySharedGameState(
       }
 
       lastSavedRef.current = serialized;
+      persistBlockedUntilRef.current = 0;
+      lastFailedSerializedRef.current = null;
       setSyncStatus({
         state: "synced",
         message: `Connected to ${snapshot.teamId}`,
@@ -179,7 +189,7 @@ export function useAmplifySharedGameState(
       return;
     }
 
-    const sharedGameStateModel = getSharedGameStateModel();
+    const sharedGameStateModel = clientRef.current?.models?.SharedGameState;
     if (!sharedGameStateModel) {
       setSyncStatus({
         state: "disabled",
@@ -220,7 +230,10 @@ export function useAmplifySharedGameState(
           return;
         }
 
-        const snapshot = record.snapshot as SharedGameSnapshot;
+        const snapshot =
+          typeof record.snapshot === "string"
+            ? (JSON.parse(record.snapshot) as SharedGameSnapshot)
+            : (record.snapshot as SharedGameSnapshot);
         const nextState = deserializeSharedGameSnapshot(snapshot);
         const serialized = JSON.stringify(
           buildSharedGameSnapshot({
@@ -281,6 +294,14 @@ export function useAmplifySharedGameState(
       return;
     }
 
+    const now = Date.now();
+    if (
+      persistBlockedUntilRef.current > now &&
+      lastFailedSerializedRef.current === serialized
+    ) {
+      return;
+    }
+
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }
@@ -288,9 +309,11 @@ export function useAmplifySharedGameState(
     saveTimerRef.current = setTimeout(() => {
       void persistSnapshot(snapshot, serialized).catch((error) => {
         console.error("Amplify sync save failed", error);
+        persistBlockedUntilRef.current = Date.now() + PERSIST_FAILURE_BACKOFF_MS;
+        lastFailedSerializedRef.current = serialized;
         setSyncStatus({
           state: "error",
-          message: "Amplify sync save failed",
+          message: "Amplify sync save failed; retrying later",
         });
       });
     }, SAVE_DEBOUNCE_MS);
@@ -306,6 +329,7 @@ export function useAmplifySharedGameState(
     bindings.orders,
     bindings.paperInventory,
     bindings.safetyStock,
+    bindings.stationSpeedMultipliers,
     bindings.teamId,
     bindings.transactions,
     bindings.workstationSpeed,

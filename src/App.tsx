@@ -35,7 +35,17 @@ import {
 } from "./utils/ui";
 import { DEFAULT_TEAM_ID, TEAM_ID_STORAGE_KEY } from "./utils/sharedGameState";
 import {
+  BUYING_COOLDOWN_SECONDS,
+  PAPER_DELIVERY_MINUTES,
+  PAPER_DELIVERY_MS,
+} from "./utils/gameConstants";
+import {
+  DEFAULT_STATION_SPEED_MULTIPLIERS,
+  type StationSpeedMultipliers,
+} from "./utils/station";
+import {
   buildSchedulerSuggestions,
+  type RequiredPapers,
   type RankedScheduleCandidate,
   type SchedulerSuggestionResult,
 } from "./utils/strategyPlanner";
@@ -112,6 +122,25 @@ function formatSuccessRate(schedule: RankedScheduleCandidate | null): string {
   return `${(averageSuccessProbability * 100).toFixed(0)}%`;
 }
 
+interface PaperRequirementEntry {
+  colorCode: string;
+  orderRequirement: number;
+  safetyStockGap: number;
+  totalNeeded: number;
+  currentInventory: number;
+  pendingDelivery: number;
+}
+
+const STATION_CONTROL_CONFIG: Array<{
+  key: keyof StationSpeedMultipliers;
+  label: string;
+  stationId: string;
+}> = [
+  { key: "station1", label: "Station 1", stationId: "station1_folding" },
+  { key: "station2", label: "Station 2", stationId: "station2_stencilling" },
+  { key: "station3", label: "Station 3", stationId: "station3_writing" },
+];
+
 function App() {
   // View state
   const [currentView, setCurrentView] = useState<ViewType>("operations");
@@ -153,6 +182,8 @@ function App() {
   const [scheduleOrderIds, setScheduleOrderIds] = useState<string[]>([]);
   const [schedulerSuggestions, setSchedulerSuggestions] =
     useState<SchedulerSuggestionResult | null>(null);
+  const [clearedSuggestedPaperPlanId, setClearedSuggestedPaperPlanId] =
+    useState<string | null>(null);
 
   // Inventory Management State - the game starts with nothing, then we will manually buy
   const [paperInventory, setPaperInventory] = useState<PaperInventory>({
@@ -167,6 +198,8 @@ function App() {
   const [cash, setCash] = useState(0); // Game starts with no cash
   const [safetyStock, setSafetyStock] = useState(12);
   const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
+  const [stationSpeedMultipliers, setStationSpeedMultipliers] =
+    useState<StationSpeedMultipliers>({ ...DEFAULT_STATION_SPEED_MULTIPLIERS });
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const schedulerTimeBucket = Math.floor(currentTime / 30000) * 30000;
@@ -184,6 +217,8 @@ function App() {
     setSafetyStock,
     workstationSpeed,
     setWorkstationSpeed,
+    stationSpeedMultipliers,
+    setStationSpeedMultipliers,
   });
 
 
@@ -208,6 +243,54 @@ function App() {
     setPendingQuantityFocusOrderId(newOrder.id);
   };
 
+  const updateStationSpeedMultiplier = (
+    stationKey: keyof StationSpeedMultipliers,
+    nextValue: number,
+  ) => {
+    setStationSpeedMultipliers((currentMultipliers) => ({
+      ...currentMultipliers,
+      [stationKey]: nextValue,
+    }));
+  };
+
+  const registerPaperRequirements = (
+    requirements: RequiredPapers | undefined,
+    label: string,
+  ) => {
+    if (!requirements) {
+      return;
+    }
+
+    const requirementEntries = Object.entries(requirements).filter(
+      ([, requirement]) => requirement.totalNeeded > 0,
+    );
+    if (!requirementEntries.length) {
+      return;
+    }
+
+    const newTransactions = requirementEntries.map(([colorCode, requirement]) =>
+      gameState.createTransaction(
+        -Math.abs(requirement.totalNeeded * getColorPrice(colorCode)),
+        `${label}: buy ${requirement.totalNeeded} ${getColorName(colorCode)} sheets`,
+        "paper",
+        colorCode,
+        requirement.totalNeeded,
+        undefined,
+        true,
+        PAPER_DELIVERY_MS,
+      ),
+    );
+
+    setTransactions((currentTransactions) => [
+      ...currentTransactions,
+      ...newTransactions,
+    ]);
+    setCash((currentCash) =>
+      currentCash + newTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+    );
+    gameState.startBuyingCooldown(BUYING_COOLDOWN_SECONDS);
+  };
+
   // Accept suggestions
   const acceptSuggestions = () => {
     const bestSuggestion = schedulerSuggestions?.bestSuggestion;
@@ -215,18 +298,38 @@ function App() {
       return;
     }
 
-    const normalizedCurrentOrderIds = normalizeScheduleOrderIds(
-      orders,
-      scheduleOrderIds,
-    );
-    const bestSuggestionIds = new Set(bestSuggestion.orderIds);
-    const trailingOrderIds = normalizedCurrentOrderIds.filter(
-      (orderId) => !bestSuggestionIds.has(orderId),
-    );
-    const nextOrderIds = [...bestSuggestion.orderIds, ...trailingOrderIds];
+    const activationTime = Date.now();
+    const bestSuggestionIdSet = new Set(bestSuggestion.orderIds);
+    const availablePaperByColor: Record<string, number> = { ...paperInventory };
+    const nextOrders = orders.map((order) => {
+      if (!bestSuggestionIdSet.has(order.id) || order.status !== "passive") {
+        return order;
+      }
 
-    setScheduleOrderIds(nextOrderIds);
-    gameState.updateScheduleOrderIds(nextOrderIds);
+      const colorCode = order.paperColor.code;
+      const hasInventoryForOrder = (availablePaperByColor[colorCode] || 0) >= order.quantity;
+      if (hasInventoryForOrder) {
+        availablePaperByColor[colorCode] -= order.quantity;
+      }
+
+      const startTime = order.startTime ?? activationTime;
+      const nextStatus: OrderStatus = hasInventoryForOrder
+        ? "ordered"
+        : "pending_inventory";
+      return {
+        ...order,
+        status: nextStatus,
+        progress: hasInventoryForOrder ? 1 : 0,
+        startTime,
+        dueTime:
+          order.dueTime ??
+          (order.leadTime > 0 ? startTime + order.leadTime * 60 * 1000 : undefined),
+      };
+    });
+
+    setOrders(nextOrders);
+    setScheduleOrderIds(bestSuggestion.orderIds);
+    gameState.updateScheduleOrderIds(bestSuggestion.orderIds);
   };
 
   // Handle pane resizing
@@ -313,8 +416,9 @@ function App() {
     gameState.updateParameters({
       workstationSpeed,
       safetyStock,
+      stationSpeedMultipliers,
     });
-  }, [workstationSpeed, safetyStock]);
+  }, [stationSpeedMultipliers, workstationSpeed, safetyStock]);
 
   useEffect(() => {
     gameState.setTeamId(teamId);
@@ -338,6 +442,8 @@ function App() {
         },
         stations: gameState.getStationManager().getAllStations(),
         currentTime: schedulerTimeBucket,
+        transactions,
+        buyingCooldownRemainingMs: gameState.getBuyingCooldownRemaining() * 1000,
         calculatePaperCurrentWorth: (paperColor) =>
           gameState.calculatePaperCurrentWorth(paperColor),
       }),
@@ -348,6 +454,7 @@ function App() {
     safetyStock,
     scheduleOrderIds,
     schedulerTimeBucket,
+    transactions,
     workstationSpeed,
   ]);
 
@@ -394,6 +501,17 @@ function App() {
   };
 
   const orderMap = new Map(orders.map((order) => [order.id, order]));
+  const toPaperRequirementEntries = (
+    requirements: RequiredPapers | undefined,
+  ): PaperRequirementEntry[] =>
+    Object.entries(requirements || {})
+      .map(([colorCode, requirement]) => ({
+        colorCode,
+        ...requirement,
+      }))
+      .filter((entry) => entry.totalNeeded > 0)
+      .sort((left, right) => right.totalNeeded - left.totalNeeded);
+
   const describeSchedule = (schedule: RankedScheduleCandidate | null) =>
     schedule
       ? schedule.orderIds
@@ -416,6 +534,17 @@ function App() {
         schedulerSuggestions.currentSchedule.orderIds,
       ),
   );
+  const currentSchedulePaperRequirements = toPaperRequirementEntries(
+    schedulerSuggestions?.currentSchedule?.requiredPapers,
+  );
+  const suggestedSchedulePaperRequirements = toPaperRequirementEntries(
+    schedulerSuggestions?.bestSuggestion?.requiredPapers,
+  );
+  const showSuggestedPaperRequirements = Boolean(
+    schedulerSuggestions?.bestSuggestion &&
+      clearedSuggestedPaperPlanId !== schedulerSuggestions.bestSuggestion.id,
+  );
+  const buyingCooldownRemainingSeconds = gameState.getBuyingCooldownRemaining();
 
   // Add new transaction
   const addTransaction = (
@@ -1168,18 +1297,131 @@ function App() {
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
                 Suggested Orders
               </h3>
-              <div className="bg-blue-50 border border-blue-200 rounded p-1">
-                <p className="text-xs text-blue-800 mb-1">
-                  {/* TODO: Backend integration for suggestions */}
-                  Based on current inventory and demand patterns:
-                </p>
-                <ul className="space-y-0.5 text-xs text-blue-700">
-                  <li>• Add 200x Birthday A5 cards (high demand next week)</li>
-                  <li>
-                    • Consider Valentine's Day inventory (3 weeks lead time)
-                  </li>
-                  <li>• Low stock on pink paper - reorder recommended</li>
-                </ul>
+              <div className="space-y-2">
+                <div className="rounded border border-blue-200 bg-blue-50 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-blue-800">
+                        Required Paper For Current Schedule
+                      </div>
+                      <div className="text-[11px] text-blue-700">
+                        {currentSchedulePaperRequirements.length
+                          ? "Paper needed to fulfill the current production schedule."
+                          : "Current schedule can be fulfilled with inventory and pending deliveries."}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() =>
+                        registerPaperRequirements(
+                          schedulerSuggestions?.currentSchedule?.requiredPapers,
+                          "Current schedule paper order",
+                        )
+                      }
+                      disabled={
+                        !currentSchedulePaperRequirements.length ||
+                        buyingCooldownRemainingSeconds > 0
+                      }
+                      className="rounded bg-blue-600 px-2 py-1 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:bg-blue-300"
+                    >
+                      {buyingCooldownRemainingSeconds > 0
+                        ? `Cooldown ${formatTime(buyingCooldownRemainingSeconds)}`
+                        : "Accept"}
+                    </button>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {currentSchedulePaperRequirements.map((requirement) => (
+                      <div
+                        key={`current-${requirement.colorCode}`}
+                        className="flex items-center justify-between rounded border border-blue-100 bg-white px-2 py-1 text-[11px]"
+                      >
+                        <div>
+                          <span className="font-semibold">
+                            {getColorName(requirement.colorCode)}
+                          </span>{" "}
+                          need {requirement.totalNeeded}
+                        </div>
+                        <div className="text-blue-700">
+                          In stock {requirement.currentInventory} | Pending{" "}
+                          {requirement.pendingDelivery} | Orders{" "}
+                          {requirement.orderRequirement}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {showSuggestedPaperRequirements && (
+                  <div className="rounded border border-emerald-200 bg-emerald-50 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-emerald-800">
+                          Required Paper For Suggested Schedule
+                        </div>
+                        <div className="text-[11px] text-emerald-700">
+                          {suggestedSchedulePaperRequirements.length
+                            ? "Paper needed if you import the suggested schedule."
+                            : "Suggested schedule does not need additional paper."}
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() =>
+                            schedulerSuggestions?.bestSuggestion &&
+                            setClearedSuggestedPaperPlanId(
+                              schedulerSuggestions.bestSuggestion.id,
+                            )
+                          }
+                          className="rounded bg-white px-2 py-1 text-[11px] font-medium text-emerald-700"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          onClick={() =>
+                            registerPaperRequirements(
+                              schedulerSuggestions?.bestSuggestion?.requiredPapers,
+                              "Suggested schedule paper order",
+                            )
+                          }
+                          disabled={
+                            !suggestedSchedulePaperRequirements.length ||
+                            buyingCooldownRemainingSeconds > 0
+                          }
+                          className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:bg-emerald-300"
+                        >
+                          {buyingCooldownRemainingSeconds > 0
+                            ? `Cooldown ${formatTime(buyingCooldownRemainingSeconds)}`
+                            : "Accept"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      {suggestedSchedulePaperRequirements.map((requirement) => (
+                        <div
+                          key={`suggested-${requirement.colorCode}`}
+                          className="flex items-center justify-between rounded border border-emerald-100 bg-white px-2 py-1 text-[11px]"
+                        >
+                          <div>
+                            <span className="font-semibold">
+                              {getColorName(requirement.colorCode)}
+                            </span>{" "}
+                            need {requirement.totalNeeded}
+                          </div>
+                          <div className="text-emerald-700">
+                            In stock {requirement.currentInventory} | Pending{" "}
+                            {requirement.pendingDelivery} | Orders{" "}
+                            {requirement.orderRequirement}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
+                  Paper delivery is {PAPER_DELIVERY_MINUTES} minutes. Buying cooldown is{" "}
+                  {BUYING_COOLDOWN_SECONDS / 60} minutes. Suggested schedule timing now
+                  includes procurement delay when extra paper must be bought.
+                </div>
               </div>
             </div>
 
@@ -1696,7 +1938,7 @@ function App() {
                   <input
                     type="number"
                     placeholder="Mins"
-                    defaultValue="10"
+                    defaultValue={PAPER_DELIVERY_MINUTES}
                     className="w-16 px-1 py-0.5 border rounded text-xs"
                     id="paperDeliveryMins"
                     title="Delivery time in minutes"
@@ -1740,12 +1982,12 @@ function App() {
                       // Get delivery time in minutes and convert to milliseconds
                       const deliveryMins = parseFloat(
                         (document.getElementById("paperDeliveryMins") as HTMLInputElement).value
-                      ) || 10;
+                      ) || PAPER_DELIVERY_MINUTES;
                       const deliveryMs = deliveryMins * 60 * 1000;
 
                       // Create pending transaction for paper purchases
                       addTransaction(cost, reason, "paper", colorMatch.code, qty, undefined, true, deliveryMs);
-                      gameState.startBuyingCooldown(300); // 5 minute cooldown
+                      gameState.startBuyingCooldown(BUYING_COOLDOWN_SECONDS);
 
                       // Clear form
                       (
@@ -1783,7 +2025,7 @@ function App() {
                         if (gameState.isBuyingOnCooldown()) {
                           gameState.clearBuyingCooldown();
                         } else {
-                          gameState.startBuyingCooldown(300); // 5 minute cooldown
+                          gameState.startBuyingCooldown(BUYING_COOLDOWN_SECONDS);
                         }
                       }}
                       className={`px-2 py-0.5 rounded text-xs font-medium ${
@@ -1820,42 +2062,53 @@ function App() {
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
                 Workstation Controls
               </h3>
-              <div className="space-y-2">
-                <div>
-                  <label className="text-xs font-medium">Speed Override</label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="3"
-                      step="0.1"
-                      value={workstationSpeed}
-                      onChange={(e) =>
-                        setWorkstationSpeed(parseFloat(e.target.value))
-                      }
-                      className="flex-1"
-                    />
-                    <span className="text-xs font-mono w-8">
-                      {workstationSpeed.toFixed(1)}x
-                    </span>
-                  </div>
+              <div className="space-y-3">
+                <div className="text-[11px] text-gray-600">
+                  Station performance overrides sync through shared parameters. Range is
+                  `0.0` to `1.5`, where `1.0` is expected pace.
                 </div>
-                <div className="grid grid-cols-2 gap-1">
-                  <button className="px-2 py-1 bg-gray-600 text-white rounded text-xs">
-                    Station 1
-                  </button>
-                  <button className="px-2 py-1 bg-gray-600 text-white rounded text-xs">
-                    Station 2
-                  </button>
-                  <button className="px-2 py-1 bg-gray-600 text-white rounded text-xs">
-                    Station 3
-                  </button>
-                  <button className="px-2 py-1 bg-gray-600 text-white rounded text-xs">
-                    Station 4
-                  </button>
+                <div className="flex items-end justify-around rounded bg-white px-2 py-3">
+                  {STATION_CONTROL_CONFIG.map((stationControl) => {
+                    const sliderValue =
+                      stationSpeedMultipliers[stationControl.key] ?? 1;
+
+                    return (
+                      <div
+                        key={stationControl.stationId}
+                        className="flex w-16 flex-col items-center gap-2"
+                      >
+                        <div className="text-xs font-semibold text-gray-700">
+                          {stationControl.label}
+                        </div>
+                        <span className="text-[11px] font-mono text-gray-500">
+                          {sliderValue.toFixed(2)}x
+                        </span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1.5"
+                          step="0.05"
+                          value={sliderValue}
+                          onChange={(e) =>
+                            updateStationSpeedMultiplier(
+                              stationControl.key,
+                              parseFloat(e.target.value),
+                            )
+                          }
+                          className="h-32 w-32 -rotate-90 accent-blue-600"
+                          aria-label={`${stationControl.label} performance`}
+                        />
+                        <div className="flex w-full justify-between text-[10px] text-gray-400">
+                          <span>0</span>
+                          <span>1.5</span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="text-xs text-gray-600">
-                  <p>Additional workstation overrides will be added here.</p>
+                <div className="text-[11px] text-gray-500">
+                  `StationManager` itself is still local runtime state. Only these
+                  mirrored station multipliers are shared/synced right now.
                 </div>
               </div>
             </div>
@@ -1873,6 +2126,8 @@ function App() {
             updateOrderField={updateOrderField}
             scheduleOrderIds={scheduleOrderIds}
             currentTime={currentTime}
+            stationSpeedMultipliers={stationSpeedMultipliers}
+            updateStationSpeedMultiplier={updateStationSpeedMultiplier}
           />
         </div>
       )}

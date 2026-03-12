@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { ProductionSchedule } from "./ProductionSchedule";
 import type { Order } from "../utils/gameState";
 import { getVerseText } from "../utils/verses";
+import { getScheduledProductionOrders } from "../utils/orders";
+import type { StationSpeedMultipliers } from "../utils/station";
 
 interface StationViewProps {
   stationNumber: number;
@@ -10,6 +12,11 @@ interface StationViewProps {
   updateOrderField: (id: string, field: keyof Order, value: any) => void;
   scheduleOrderIds: string[];
   currentTime: number;
+  stationSpeedMultipliers: StationSpeedMultipliers;
+  updateStationSpeedMultiplier: (
+    stationKey: keyof StationSpeedMultipliers,
+    nextValue: number,
+  ) => void;
 }
 
 export function StationView({ 
@@ -18,15 +25,77 @@ export function StationView({
   setOrders, 
   updateOrderField,
   scheduleOrderIds,
-  currentTime 
+  currentTime,
+  stationSpeedMultipliers,
+  updateStationSpeedMultiplier,
 }: StationViewProps) {
+  const stationKey = `station${stationNumber}` as keyof StationSpeedMultipliers;
+  const requiredProgress = stationNumber;
   // Current order being worked on by this station
   const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
+  const scheduledOrders = getScheduledProductionOrders(orders, scheduleOrderIds);
+  const stationQueue = scheduledOrders.filter(
+    (order) =>
+      order.progress === requiredProgress &&
+      order.status !== "pending_inventory" &&
+      order.status !== "sent" &&
+      order.status !== "approved" &&
+      order.status !== "failed",
+  );
+  const topPriorityOrder =
+    stationQueue[0] || null;
+  const selectedOrderStillVisible = currentOrderId
+    ? stationQueue.some((order) => order.id === currentOrderId)
+    : false;
+
+  useEffect(() => {
+    if (!topPriorityOrder) {
+      if (currentOrderId !== null) {
+        setCurrentOrderId(null);
+      }
+      return;
+    }
+
+    if (!currentOrderId || !selectedOrderStillVisible) {
+      setCurrentOrderId(topPriorityOrder.id);
+    }
+  }, [currentOrderId, selectedOrderStillVisible, topPriorityOrder]);
+
   const currentOrder = orders.find(o => o.id === currentOrderId);
+  const stationSpeed = stationSpeedMultipliers[stationKey] ?? 1;
   const displayedVerse = currentOrder
     ? currentOrder.selectedVerse ||
       getVerseText(currentOrder.occasion, currentOrder.verseSize)
     : undefined;
+  const progressPercent =
+    currentOrder && currentOrder.progress > 0
+      ? Math.min((currentOrder.progress / 3) * 100, 100)
+      : 0;
+
+  const handleStartJob = () => {
+    if (!currentOrder) {
+      return;
+    }
+
+    if (currentOrder.status !== "WIP") {
+      updateOrderField(currentOrder.id, "status", "WIP");
+    }
+  };
+
+  const handleCompleteStage = () => {
+    if (!currentOrder) {
+      return;
+    }
+
+    if (stationNumber === 3) {
+      updateOrderField(currentOrder.id, "status", "sent");
+      updateOrderField(currentOrder.id, "progress", 3);
+      return;
+    }
+
+    updateOrderField(currentOrder.id, "progress", currentOrder.progress + 1);
+    updateOrderField(currentOrder.id, "status", "ordered");
+  };
   
   // Resizable panes state
   const [leftPaneWidth, setLeftPaneWidth] = useState(70); // percentage
@@ -85,7 +154,7 @@ export function StationView({
                 Online
               </span>
               <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-sm">
-                Speed: 1.0x
+                Speed: {stationSpeed.toFixed(2)}x
               </span>
             </div>
           </div>
@@ -133,13 +202,13 @@ export function StationView({
                     </p>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                    <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: '45%' }}></div>
+                    <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
                   </div>
                 </>
               ) : (
                 <div className="text-center py-8">
                   <p className="text-lg text-gray-500 font-medium">No job selected</p>
-                  <p className="text-base text-gray-400 mt-2">Click an order in the schedule to select it</p>
+                  <p className="text-base text-gray-400 mt-2">The top priority scheduled job will appear here automatically</p>
                 </div>
               )}
             </div>
@@ -150,13 +219,15 @@ export function StationView({
             <h3 className="text-sm font-semibold text-gray-700 mb-2">Job Queue</h3>
             <div className="bg-gray-50 rounded p-3">
               <div className="space-y-2 max-h-48 overflow-y-auto">
-                {orders
-                  .filter(order => order.status === "WIP" || order.status === "pending_inventory")
+                {stationQueue
                   .slice(0, 5)
                   .map((order, index) => (
                     <div
                       key={order.id}
-                      className="flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer"
+                      onClick={() => setCurrentOrderId(order.id)}
+                      className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
+                        currentOrderId === order.id ? "border-blue-500 ring-1 ring-blue-300" : ""
+                      }`}
                     >
                       <div className="flex-1">
                         <div className="text-sm font-medium">Order #{order.id.slice(-6)}</div>
@@ -170,7 +241,7 @@ export function StationView({
                       </div>
                     </div>
                   ))}
-                {orders.filter(order => order.status === "WIP" || order.status === "pending_inventory").length === 0 && (
+                {stationQueue.length === 0 && (
                   <div className="text-sm text-gray-500 text-center py-4">
                     No jobs in queue
                   </div>
@@ -183,17 +254,22 @@ export function StationView({
           <div className="mb-6">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">Station Controls</h3>
             <div className="grid grid-cols-2 gap-2">
-              <button className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium">
+              <button
+                onClick={handleStartJob}
+                disabled={!currentOrder}
+                className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium disabled:cursor-not-allowed disabled:bg-green-300"
+              >
                 Start Job
               </button>
               <button className="px-3 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 text-sm font-medium">
                 Pause Station
               </button>
-              <button className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium">
-                Priority Override
-              </button>
-              <button className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-medium">
-                Emergency Stop
+              <button
+                onClick={handleCompleteStage}
+                disabled={!currentOrder}
+                className="col-span-2 px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:cursor-not-allowed disabled:bg-blue-300"
+              >
+                {stationNumber === 3 ? "Mark Pending Approval" : "Mark Stage Complete"}
               </button>
             </div>
           </div>
@@ -230,39 +306,24 @@ export function StationView({
               <div className="flex items-center gap-2">
                 <input
                   type="range"
-                  min="0.1"
-                  max="3"
-                  step="0.1"
-                  defaultValue="1"
+                  min="0"
+                  max="1.5"
+                  step="0.05"
+                  value={stationSpeed}
+                  onChange={(e) =>
+                    updateStationSpeedMultiplier(
+                      stationKey,
+                      parseFloat(e.target.value),
+                    )
+                  }
                   className="flex-1"
                 />
-                <span className="text-sm font-mono w-12">1.0x</span>
+                <span className="text-sm font-mono w-12">{stationSpeed.toFixed(2)}x</span>
               </div>
               <div className="flex justify-between text-xs text-gray-500 mt-1">
-                <span>0.1x</span>
+                <span>0.0x</span>
                 <span>Normal</span>
-                <span>3.0x</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Material Status */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">Material Status</h3>
-            <div className="bg-gray-50 rounded p-3">
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Paper Stock:</span>
-                  <span className="font-medium text-green-600">Sufficient</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Ink Levels:</span>
-                  <span className="font-medium text-yellow-600">Low</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Maintenance Due:</span>
-                  <span className="font-medium">In 24 hrs</span>
-                </div>
+                <span>1.5x</span>
               </div>
             </div>
           </div>

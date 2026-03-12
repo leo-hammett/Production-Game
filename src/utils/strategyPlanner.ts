@@ -1,6 +1,8 @@
 import type { GameParameters, Order, PaperInventory } from "./gameState";
 import { FAILURE_FINE_RATIO } from "./gameState";
+import { PAPER_DELIVERY_MS } from "./gameConstants";
 import { normalizeScheduleOrderIds } from "./orders";
+import type { Transaction } from "./gameState";
 import {
   calculateStationItemTimeDistribution,
   type NormalDistribution,
@@ -53,6 +55,8 @@ export interface RankedScheduleCandidate {
   orderIds: string[];
   expectedProfit: number;
   expectedBusyMs: number;
+  expectedProductionMs: number;
+  inventoryDelayMs: number;
   profitPerSecond: number;
   requiredPapers: RequiredPapers;
   orderEvaluations: ScheduleOrderEvaluation[];
@@ -62,9 +66,11 @@ export interface SchedulerContext {
   orders: Order[];
   scheduleOrderIds: string[];
   paperInventory: PaperInventory;
+  transactions?: Transaction[];
   parameters: Pick<GameParameters, "safetyStock" | "workstationSpeed">;
   stations: Station[];
   currentTime: number;
+  buyingCooldownRemainingMs?: number;
   calculatePaperCurrentWorth: (paperColor: Order["paperColor"]) => number;
   maxCandidateEvaluations?: number;
   topSuggestionCount?: number;
@@ -194,8 +200,27 @@ function buildRequiredPapers(
   orderMap: Map<string, Order>,
   paperInventory: PaperInventory,
   safetyStock: number,
+  transactions: Transaction[] = [],
+  currentTime: number,
 ): RequiredPapers {
   const requiredPapers: RequiredPapers = {};
+  const pendingDeliveriesByColor = transactions.reduce<Record<string, number>>(
+    (accumulator, transaction) => {
+      if (
+        transaction.type === "paper" &&
+        transaction.pending &&
+        transaction.paperColor &&
+        transaction.paperQuantity &&
+        (!transaction.arrivalTime || transaction.arrivalTime >= currentTime)
+      ) {
+        accumulator[transaction.paperColor] =
+          (accumulator[transaction.paperColor] || 0) + transaction.paperQuantity;
+      }
+
+      return accumulator;
+    },
+    {},
+  );
 
   orderIds.forEach((orderId) => {
     const order = orderMap.get(orderId);
@@ -210,7 +235,7 @@ function buildRequiredPapers(
         safetyStockGap: 0,
         totalNeeded: 0,
         currentInventory: paperInventory[colorCode] || 0,
-        pendingDelivery: 0,
+        pendingDelivery: pendingDeliveriesByColor[colorCode] || 0,
       };
     }
 
@@ -218,18 +243,29 @@ function buildRequiredPapers(
   });
 
   Object.values(requiredPapers).forEach((paperRequirement) => {
-    const inventoryAfterOrders =
-      paperRequirement.currentInventory - paperRequirement.orderRequirement;
+    const availableInventory =
+      paperRequirement.currentInventory + paperRequirement.pendingDelivery;
+    const orderShortfall = Math.max(
+      0,
+      paperRequirement.orderRequirement - availableInventory,
+    );
+    const endingInventoryWithoutExtraSafety =
+      availableInventory - paperRequirement.orderRequirement;
+
     paperRequirement.safetyStockGap = Math.max(
       0,
-      safetyStock - inventoryAfterOrders,
+      safetyStock - Math.max(0, endingInventoryWithoutExtraSafety),
     );
     paperRequirement.totalNeeded = Math.max(
       0,
       paperRequirement.orderRequirement +
-        paperRequirement.safetyStockGap -
-        paperRequirement.currentInventory,
+        safetyStock -
+        availableInventory,
     );
+
+    if (paperRequirement.totalNeeded < orderShortfall) {
+      paperRequirement.totalNeeded = orderShortfall;
+    }
   });
 
   return requiredPapers;
@@ -287,7 +323,22 @@ export function evaluateScheduleCandidate(
     (sum, evaluation) => sum + evaluation.expectedValue,
     0,
   );
-  const expectedBusyMs = cumulativeDistribution.mean;
+  const requiredPapers = buildRequiredPapers(
+    orderIds,
+    orderMap,
+    context.paperInventory,
+    context.parameters.safetyStock,
+    context.transactions,
+    context.currentTime,
+  );
+  const requiresInventoryPurchase = Object.values(requiredPapers).some(
+    (paperRequirement) => paperRequirement.totalNeeded > 0,
+  );
+  const inventoryDelayMs = requiresInventoryPurchase
+    ? (context.buyingCooldownRemainingMs || 0) + PAPER_DELIVERY_MS
+    : 0;
+  const expectedProductionMs = cumulativeDistribution.mean;
+  const expectedBusyMs = expectedProductionMs + inventoryDelayMs;
 
   return {
     id: orderIds.join("|") || "empty",
@@ -295,14 +346,11 @@ export function evaluateScheduleCandidate(
     orderIds,
     expectedProfit,
     expectedBusyMs,
+    expectedProductionMs,
+    inventoryDelayMs,
     profitPerSecond:
       expectedBusyMs > 0 ? expectedProfit / (expectedBusyMs / 1000) : 0,
-    requiredPapers: buildRequiredPapers(
-      orderIds,
-      orderMap,
-      context.paperInventory,
-      context.parameters.safetyStock,
-    ),
+    requiredPapers,
     orderEvaluations,
   };
 }

@@ -54,6 +54,7 @@ export interface SerializableOrder {
   price: number;
   available: boolean;
   status: Order["status"];
+  progress: number;
   startTime?: number;
   dueTime?: number;
   selectedVerse?: string;
@@ -80,6 +81,8 @@ export interface SharedGameSnapshot {
   paperInventory: PaperInventory;
   transactions: SerializableTransaction[];
   cash: number;
+  // StationManager is runtime-only and does not sync directly.
+  // Mirror any station state that must sync through `parameters`.
   parameters: GameParameters;
   currentSchedule: {
     id: string;
@@ -157,7 +160,7 @@ export function createEmptySharedGameState(
 export function buildSharedGameSnapshot(
   input: SharedGameStateInput,
 ): SharedGameSnapshot {
-  return {
+  const snapshot = {
     schemaVersion: SHARED_GAME_SCHEMA_VERSION,
     teamId: input.teamId,
     orders: input.orders.map(serializeOrder),
@@ -172,6 +175,8 @@ export function buildSharedGameSnapshot(
     occasions: [...input.occasions],
     paperColors: input.paperColors.map(serializePaperColor),
   };
+
+  return JSON.parse(JSON.stringify(snapshot)) as SharedGameSnapshot;
 }
 
 export function deserializeSharedGameSnapshot(
@@ -238,6 +243,7 @@ function serializeOrder(order: Order): SerializableOrder {
     price: order.price,
     available: order.available,
     status: order.status,
+    progress: order.progress,
     startTime: order.startTime,
     dueTime: order.dueTime,
     selectedVerse: order.selectedVerse,
@@ -265,6 +271,7 @@ function deserializeOrder(
     price: order.price,
     available: order.available,
     status: order.status,
+    progress: order.progress ?? (order.status === "pending_inventory" ? 0 : order.status === "sent" || order.status === "approved" ? 3 : 1),
     startTime: order.startTime,
     dueTime: order.dueTime,
     selectedVerse: order.selectedVerse,

@@ -77,6 +77,8 @@ export const getStatusColor = (status: OrderStatus) => {
   return statusColors[status];
 };
 
+import { BUYING_COOLDOWN_SECONDS } from "./gameConstants";
+
 // Timer formatting
 export const formatTime = (seconds: number) => {
   const mins = Math.floor(seconds / 60);
@@ -92,7 +94,7 @@ export const startCooldownTimer = (
   setCooldownTimer: React.Dispatch<React.SetStateAction<number | null>>
 ) => {
   if (cooldownTimer) clearInterval(cooldownTimer);
-  if (buyingCooldown === 0) setBuyingCooldown(300); // Default 5 minutes if starting from 0
+  if (buyingCooldown === 0) setBuyingCooldown(BUYING_COOLDOWN_SECONDS);
   const timer = setInterval(() => {
     setBuyingCooldown((prev) => {
       if (prev <= 1) {

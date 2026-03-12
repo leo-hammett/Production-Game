@@ -1,4 +1,8 @@
-import { StationManager } from "./station";
+import {
+  DEFAULT_STATION_SPEED_MULTIPLIERS,
+  StationManager,
+  type StationSpeedMultipliers,
+} from "./station";
 import { STANDARD_TIME_RATIO } from "./gameConstants";
 import { Schedule } from "./strategyPlanner";
 
@@ -78,6 +82,7 @@ export interface Order {
   price: number;
   available: boolean;
   status: OrderStatus;
+  progress: number; // 0 waiting on inventory, 1 ready station 1, 2 ready station 2, 3 ready station 3
   startTime?: number;
   dueTime?: number;
   selectedVerse?: string; // The actual verse text selected for this order (TODO)
@@ -86,6 +91,7 @@ export interface Order {
 // Game parameters that affect gameplay
 export interface GameParameters {
   workstationSpeed: number;
+  stationSpeedMultipliers: StationSpeedMultipliers;
   safetyStock: number;
   buyingCooldown: number;
   buyingCooldownEndTime: number | null; // Unix timestamp when cooldown ends (null = no cooldown)
@@ -94,6 +100,8 @@ export interface GameParameters {
   colourLoveMultiplier: number; // For demand-based pricing
   whiteLoveMultiplier: number; // For demand-based pricing
   standardTimeRatio: number; // Contingency factor for worker breaks, etc. (normal time = observed time * this ratio)
+  greedometer: number; // -1 bearish to +1 bullish bias for demand forecasting
+  forecastSpeed: number; // Future production speed multiplier relative to observed current speed
 }
 
 // Global game state interface
@@ -147,6 +155,7 @@ class GameStateManager {
       cash: 0,
       parameters: {
         workstationSpeed: 1.0,
+        stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
         safetyStock: 12,
         buyingCooldown: 0,
         buyingCooldownEndTime: null,
@@ -155,6 +164,8 @@ class GameStateManager {
         colourLoveMultiplier: 1.0,
         whiteLoveMultiplier: 1.0,
         standardTimeRatio: STANDARD_TIME_RATIO,
+        greedometer: 0,
+        forecastSpeed: 1.0,
       },
       stationManager: new StationManager(),
       currentSchedule: new Schedule("current", []),
@@ -184,6 +195,9 @@ class GameStateManager {
       paperColors,
       paperColorMap,
     };
+    this.state.stationManager.applyStationSpeedMultipliers(
+      this.state.parameters.stationSpeedMultipliers,
+    );
   }
 
   static getInstance(): GameStateManager {
@@ -416,6 +430,9 @@ class GameStateManager {
 
   updateParameters(params: Partial<GameParameters>) {
     this.state.parameters = { ...this.state.parameters, ...params };
+    this.state.stationManager.applyStationSpeedMultipliers(
+      this.state.parameters.stationSpeedMultipliers,
+    );
     this.notify();
   }
 
@@ -552,6 +569,7 @@ class GameStateManager {
       cash: 0,
       parameters: {
         workstationSpeed: 1.0,
+        stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
         safetyStock: 12,
         buyingCooldown: 0,
         buyingCooldownEndTime: null,
@@ -560,6 +578,8 @@ class GameStateManager {
         colourLoveMultiplier: 1.0,
         whiteLoveMultiplier: 1.0,
         standardTimeRatio: STANDARD_TIME_RATIO,
+        greedometer: 0,
+        forecastSpeed: 1.0,
       },
       stationManager: new StationManager(),
       currentSchedule: new Schedule("current", []),
@@ -589,6 +609,9 @@ class GameStateManager {
       paperColors,
       paperColorMap,
     };
+    this.state.stationManager.applyStationSpeedMultipliers(
+      this.state.parameters.stationSpeedMultipliers,
+    );
     this.notify();
   }
 }

@@ -154,6 +154,7 @@ export const addOrder = (): Order => {
     price: 2.0,
     available: true,
     status: "passive",
+    progress: 0,
   };
   return newOrder;
 };
@@ -272,6 +273,18 @@ export const updateOrder = (
     const inactiveStatuses = ["passive", "failed", "deleted", "other"];
     
     const updatedOrder = { ...order, [field]: value };
+    const nextStatus = value as OrderStatus;
+
+    if (nextStatus === "pending_inventory") {
+      updatedOrder.progress = 0;
+    } else if (
+      (nextStatus === "ordered" || nextStatus === "WIP") &&
+      updatedOrder.progress === 0
+    ) {
+      updatedOrder.progress = 1;
+    } else if (nextStatus === "sent" || nextStatus === "approved") {
+      updatedOrder.progress = 3;
+    }
     
     // If moving from inactive to active status, set startTime and dueTime
     if (inactiveStatuses.includes(order.status) && activeStatuses.includes(value as string)) {
