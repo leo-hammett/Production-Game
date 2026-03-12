@@ -15,7 +15,10 @@ export class PaperColor {
   }
 
   // Get the effective price considering market conditions
-  getEffectivePrice(colourLoveMultiplier: number = 1.0, whiteLoveMultiplier: number = 1.0): number {
+  getEffectivePrice(
+    colourLoveMultiplier: number = 1.0,
+    whiteLoveMultiplier: number = 1.0,
+  ): number {
     const isWhite = this.code === "w";
     const multiplier = isWhite ? whiteLoveMultiplier : colourLoveMultiplier;
     return this.basePrice * multiplier;
@@ -39,12 +42,14 @@ export interface Transaction {
   id: string;
   timestamp: Date;
   amount: number; // positive for income, negative for expenses
-  type: "cash" | "paper";
+  type: "cash" | "paper" | "inventory";
   paperColor?: string;
   paperQuantity?: number;
   reason?: string; // Optional reason
-  affectsInventory?: boolean; // For non-paper inventory purchases
   orderId?: string; // Link to order for failure fines
+  pending?: boolean; // For inventory transactions that haven't arrived yet
+  deliveryTime?: number; // Expected delivery time in milliseconds
+  arrivalTime?: number; // When the item should arrive (timestamp + deliveryTime)
 }
 
 // Order-related types (moved from orders.ts to avoid circular dependency)
@@ -82,8 +87,8 @@ export interface GameParameters {
   buyingCooldown: number;
   sellMarkdown: number;
   failureFineRatio: number;
-  colourLoveMultiplier: number;  // For demand-based pricing
-  whiteLoveMultiplier: number;   // For demand-based pricing
+  colourLoveMultiplier: number; // For demand-based pricing
+  whiteLoveMultiplier: number; // For demand-based pricing
 }
 
 // Global game state interface
@@ -116,9 +121,9 @@ class GameStateManager {
       new PaperColor("b", "Blue", "bg-blue-100", 20),
       new PaperColor("s", "Salmon", "bg-orange-100", 20),
     ];
-    
+
     const paperColorMap = new Map<string, PaperColor>(
-      paperColors.map(color => [color.code, color])
+      paperColors.map((color) => [color.code, color]),
     );
 
     this.state = {
@@ -184,7 +189,7 @@ class GameStateManager {
   }
 
   private notify() {
-    this.subscribers.forEach(callback => callback());
+    this.subscribers.forEach((callback) => callback());
   }
 
   // Getters
@@ -245,22 +250,24 @@ class GameStateManager {
 
   // Calculate current worth of paper based on demand multipliers
   calculatePaperCurrentWorth(paperColor: PaperColor | string): number {
-    const color = typeof paperColor === 'string' ? 
-      this.state.paperColorMap.get(paperColor) : 
-      paperColor;
-    
+    const color =
+      typeof paperColor === "string"
+        ? this.state.paperColorMap.get(paperColor)
+        : paperColor;
+
     if (!color) return 0;
-    
+
     const isWhite = color.code === "w";
-    const multiplier = isWhite ? 
-      this.state.parameters.whiteLoveMultiplier : 
-      this.state.parameters.colourLoveMultiplier;
-    
+    const multiplier = isWhite
+      ? this.state.parameters.whiteLoveMultiplier
+      : this.state.parameters.colourLoveMultiplier;
+
     return color.basePrice * multiplier;
   }
 
   // Calculate financial metrics - paper valued at cost (what we paid)
   calculateNetWorth(): number {
+    // Paper inventory valued at purchase price
     const paperValue = Object.entries(this.state.paperInventory).reduce(
       (total, [colorCode, qty]) => {
         const color = this.state.paperColorMap.get(colorCode);
@@ -269,20 +276,55 @@ class GameStateManager {
       0,
     );
 
-    // Add value of other inventory purchases (marked as affecting inventory)
-    const otherInventoryValue = this.state.transactions
-      .filter((t) => t.type === "cash" && t.affectsInventory && t.amount < 0)
-      .reduce((total, t) => total + Math.abs(t.amount), 0);
+    // Pending paper purchases (paid for but not yet in inventory)
+    const pendingPaperValue = this.state.transactions
+      .filter((t) => t.type === "paper" && t.pending && t.paperQuantity && t.paperColor)
+      .reduce((total, t) => {
+        const color = this.state.paperColorMap.get(t.paperColor!);
+        return total + (t.paperQuantity! * (color?.basePrice || 10));
+      }, 0);
 
-    return this.state.cash + paperValue + otherInventoryValue;
+    // Other inventory value - sum all inventory transactions (positive or negative)
+    // Negative amounts increase inventory value, positive amounts decrease it
+    const otherInventoryValue = this.state.transactions
+      .filter((t) => t.type === "inventory")
+      .reduce((total, t) => total - t.amount, 0);
+
+    // Net worth = cash + all inventory at cost
+    return this.state.cash + paperValue + pendingPaperValue + otherInventoryValue;
   }
 
   // Calculate actual profit if we had to sell inventory at end-game markdown price
+  // This shows the real P&L if game ended now
   calculateProfit(): number {
-    const netWorth = this.calculateNetWorth();
-    const inventoryValue = netWorth - this.state.cash;
-    const finalSellValue = inventoryValue * this.state.parameters.sellMarkdown;
-    return this.state.cash + finalSellValue;
+    // Paper inventory valued at selling price (with markdown)
+    const paperSellValue = Object.entries(this.state.paperInventory).reduce(
+      (total, [colorCode, qty]) => {
+        const color = this.state.paperColorMap.get(colorCode);
+        const basePrice = color?.basePrice || 10;
+        return total + qty * basePrice * this.state.parameters.sellMarkdown;
+      },
+      0,
+    );
+
+    // Pending paper valued at selling price (with markdown)
+    const pendingPaperSellValue = this.state.transactions
+      .filter((t) => t.type === "paper" && t.pending && t.paperQuantity && t.paperColor)
+      .reduce((total, t) => {
+        const color = this.state.paperColorMap.get(t.paperColor!);
+        const basePrice = color?.basePrice || 10;
+        return total + (t.paperQuantity! * basePrice * this.state.parameters.sellMarkdown);
+      }, 0);
+
+    // Other inventory at sell price (with markdown)
+    // Sum all inventory transactions and apply markdown
+    const otherInventoryValue = this.state.transactions
+      .filter((t) => t.type === "inventory")
+      .reduce((total, t) => total - t.amount, 0);
+    const otherInventorySellValue = otherInventoryValue * this.state.parameters.sellMarkdown;
+
+    // Profit = cash + (all inventory at sell price)
+    return this.state.cash + paperSellValue + pendingPaperSellValue + otherInventorySellValue;
   }
 
   // Helper functions for colors (backwards compatibility)
@@ -292,7 +334,7 @@ class GameStateManager {
 
   getColorByName(name: string): PaperColor | undefined {
     return this.state.paperColors.find(
-      (c) => c.name.toLowerCase() === name.toLowerCase()
+      (c) => c.name.toLowerCase() === name.toLowerCase(),
     );
   }
 
@@ -344,7 +386,7 @@ class GameStateManager {
   }
 
   updateOrder(orderId: string, updates: Partial<Order>) {
-    const index = this.state.orders.findIndex(o => o.id === orderId);
+    const index = this.state.orders.findIndex((o) => o.id === orderId);
     if (index !== -1) {
       this.state.orders[index] = { ...this.state.orders[index], ...updates };
       this.notify();
@@ -360,21 +402,26 @@ class GameStateManager {
   createTransaction(
     amount: number,
     reason: string,
+    type: "cash" | "paper" | "inventory" = "cash",
     paperColor?: string,
     paperQuantity?: number,
-    affectsInventory?: boolean,
     orderId?: string,
+    pending?: boolean,
+    deliveryTime?: number,
   ): Transaction {
+    const now = Date.now();
     return {
-      id: Date.now().toString(),
+      id: now.toString(),
       timestamp: new Date(),
       amount,
-      type: paperColor ? "paper" : "cash",
+      type: paperColor ? "paper" : type, // If paperColor is set, it's always "paper"
       paperColor,
       paperQuantity,
       reason,
-      affectsInventory,
       orderId,
+      pending,
+      deliveryTime,
+      arrivalTime: pending && deliveryTime ? now + deliveryTime : undefined,
     };
   }
 
@@ -385,15 +432,16 @@ class GameStateManager {
 
   // Get orders with specific status
   getOrdersByStatus(status: string): Order[] {
-    return this.state.orders.filter(o => o.status === status);
+    return this.state.orders.filter((o) => o.status === status);
   }
 
   // Get pending orders (orders that will need inventory)
   getPendingOrders(): Order[] {
-    return this.state.orders.filter(o => 
-      o.status === "ordered" || 
-      o.status === "pending_inventory" || 
-      o.status === "WIP"
+    return this.state.orders.filter(
+      (o) =>
+        o.status === "ordered" ||
+        o.status === "pending_inventory" ||
+        o.status === "WIP",
     );
   }
 
@@ -408,9 +456,9 @@ class GameStateManager {
       new PaperColor("b", "Blue", "bg-blue-100", 20),
       new PaperColor("s", "Salmon", "bg-orange-100", 20),
     ];
-    
+
     const paperColorMap = new Map<string, PaperColor>(
-      paperColors.map(color => [color.code, color])
+      paperColors.map((color) => [color.code, color]),
     );
 
     this.state = {
@@ -491,3 +539,4 @@ export const getColorPrice = (code: string) => gameState.getColorPrice(code);
 export const calculateNetWorth = () => gameState.calculateNetWorth();
 export const calculateProfit = () => gameState.calculateProfit();
 export const addTransaction = gameState.createTransaction.bind(gameState);
+

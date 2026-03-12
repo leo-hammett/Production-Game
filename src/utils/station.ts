@@ -16,10 +16,10 @@ export interface NormalDistribution {
 }
 
 export interface RawStationTaskTime {
-  timeTaken: number;
+  observedTimeTaken: number;
   numberOfItems: number; // if many are done at once we need to know this as it'll need to be weighted differently when merging distributuions
-  employeeLockedInNess: number;
-  standardTime: number;
+  employeePerformance: number; // Employee will be faster during timing.
+  taskSize: number; //Weather writing 2,4,6 lines or folding 2,4,6 times etc.
 }
 
 // Station type representing a production workstation/cell
@@ -35,6 +35,8 @@ export interface Station {
   // Current state
   itemsLeftToProcessUntilIdle: number; //Estimate of course...
   speedMultiplier: number; // Speed override factor (default 1.0)
+
+  generateStationProcessingTimes CLAUDE PLS MAKER THIS INTO A FUCNTION, INPUT IS RAW TASK TIMES AND GAMESTATE needs to have the standardTimeRatio which we must fetch, then for each size we have RawStationTaskTimes for we should make a distribution for and add it to a dictionary for future fetching, generateStationProcessingTimes should also return the distribution
 }
 
 // Station configuration for different product sizes, based on the station this will vary.
@@ -102,6 +104,7 @@ export function calculateStationOccupationTimePerOrder(
 export function calculateStationItemTimeDistribution(
   station: Station,
   order: Order,
+  speedMultiplier: number,
 ): NormalDistribution {
   // This function is for a single item in an order
   // TODO: Calculate processing time distribution for one item

@@ -92,6 +92,7 @@ function App() {
   );
   const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
 
   // Update order
@@ -154,6 +155,47 @@ function App() {
     };
   }, [isDragging]);
 
+  // Sync local state with gameState singleton
+  useEffect(() => {
+    gameState.setCash(cash);
+  }, [cash]);
+
+  useEffect(() => {
+    gameState.setPaperInventory(paperInventory);
+  }, [paperInventory]);
+
+  useEffect(() => {
+    gameState.setTransactions(transactions);
+  }, [transactions]);
+
+  // Timer for pending transactions countdown
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+      
+      // Check for completed pending transactions
+      transactions.forEach(trans => {
+        if (trans.pending && trans.arrivalTime && Date.now() >= trans.arrivalTime) {
+          completePendingTransaction(trans.id);
+        }
+      });
+    }, 1000);
+    
+    return () => clearInterval(timer);
+  }, [transactions]);
+
+  // Warning before leaving the page
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'You have unsaved game data. Are you sure you want to leave?';
+      return 'You have unsaved game data. Are you sure you want to leave?';
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -201,25 +243,30 @@ function App() {
   const addTransaction = (
     amount: number,
     reason: string,
+    type: "cash" | "paper" | "inventory" = "cash",
     paperColor?: string,
     paperQuantity?: number,
-    affectsInventory?: boolean,
     orderId?: string,
+    pending?: boolean,
+    deliveryTime?: number,
   ) => {
     const newTransaction = gameState.createTransaction(
       amount,
       reason,
+      type,
       paperColor,
       paperQuantity,
-      affectsInventory,
-      orderId
+      orderId,
+      pending,
+      deliveryTime
     );
 
     setTransactions([...transactions, newTransaction]);
     setCash((prev) => prev + amount);
 
-    // Update paper inventory if it's a paper transaction
-    if (paperColor && paperQuantity) {
+    // Update paper inventory if it's a paper transaction and not pending
+    // Negative quantities are allowed (for returns/corrections)
+    if (paperColor && paperQuantity !== undefined && !pending) {
       setPaperInventory((prev) => ({
         ...prev,
         [paperColor]: (prev[paperColor] || 0) + paperQuantity,
@@ -274,11 +321,34 @@ function App() {
     // Reverse the cash effect
     setCash((prev) => prev - trans.amount);
     
-    // Reverse inventory effect if it's a paper transaction
-    if (trans.paperColor && trans.paperQuantity) {
+    // Reverse inventory effect if it's a paper transaction (and not pending)
+    if (trans.paperColor && trans.paperQuantity && !trans.pending) {
       setPaperInventory((prev) => ({
         ...prev,
         [trans.paperColor!]: (prev[trans.paperColor!] || 0) - trans.paperQuantity!,
+      }));
+    }
+  };
+
+  // Complete a pending transaction
+  const completePendingTransaction = (id: string) => {
+    const transIndex = transactions.findIndex(t => t.id === id);
+    if (transIndex === -1) return;
+    
+    const trans = transactions[transIndex];
+    if (!trans.pending) return;
+    
+    // Update transaction to no longer be pending
+    const updatedTrans = { ...trans, pending: false };
+    const newTransactions = [...transactions];
+    newTransactions[transIndex] = updatedTrans;
+    setTransactions(newTransactions);
+    
+    // Now add to inventory
+    if (trans.paperColor && trans.paperQuantity !== undefined) {
+      setPaperInventory((prev) => ({
+        ...prev,
+        [trans.paperColor!]: (prev[trans.paperColor!] || 0) + trans.paperQuantity!,
       }));
     }
   };
@@ -721,14 +791,17 @@ function App() {
             <div className="flex justify-between items-center mb-2 px-1">
               <div className="flex gap-2">
                 <button
-                  onClick={addOrder}
+                  onClick={() => {
+                    const newOrder = addOrder();
+                    setOrders([...orders, newOrder]);
+                  }}
                   className="px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium"
                   title="Add Order (Ctrl+N)"
                 >
                   + Add Order
                 </button>
                 <button
-                  onClick={deleteRecentOrder}
+                  onClick={() => setOrders(deleteRecentOrder(orders))}
                   className="px-2 py-0.5 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium"
                   title="Delete newest passive order (Ctrl+Z)"
                 >
@@ -983,9 +1056,11 @@ function App() {
                 <table className="w-full text-xs">
                   <thead className="bg-gray-200 sticky top-0">
                     <tr>
-                      <th className="px-1 py-0.5 text-left">Amount</th>
+                      <th className="px-1 py-0.5 text-left">Revenue</th>
                       <th className="px-1 py-0.5 text-left">Type</th>
                       <th className="px-1 py-0.5 text-left">Reason</th>
+                      <th className="px-1 py-0.5 text-left">Status</th>
+                      <th className="px-1 py-0.5 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -997,17 +1072,114 @@ function App() {
                           <td
                             className={`px-1 py-0.5 font-mono ${trans.amount >= 0 ? "text-green-600" : "text-red-600"}`}
                           >
-                            £{trans.amount.toFixed(2)}
+                            {editingTransactionId === trans.id ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={trans.amount}
+                                onChange={(e) => editTransaction(trans.id, { amount: parseFloat(e.target.value) || 0 })}
+                                className="w-20 px-1 border rounded text-xs"
+                              />
+                            ) : (
+                              <span onClick={() => setEditingTransactionId(trans.id)} className="cursor-pointer">
+                                £{trans.amount.toFixed(2)}
+                              </span>
+                            )}
                           </td>
                           <td className="px-1 py-0.5">
-                            {trans.type === "paper" && trans.paperColor
-                              ? `${trans.paperColor}:${trans.paperQuantity}`
-                              : trans.affectsInventory
-                                ? "Inventory"
-                                : "Cash"}
+                            {trans.type === "paper" && trans.paperColor ? (
+                              editingTransactionId === trans.id ? (
+                                <div className="flex gap-1">
+                                  <select
+                                    value={trans.paperColor}
+                                    onChange={(e) => editTransaction(trans.id, { paperColor: e.target.value })}
+                                    className="w-12 px-1 border rounded text-xs"
+                                  >
+                                    {PAPER_COLORS.map(color => (
+                                      <option key={color.code} value={color.code}>{color.code}</option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    type="number"
+                                    value={trans.paperQuantity || 0}
+                                    onChange={(e) => editTransaction(trans.id, { paperQuantity: parseInt(e.target.value) || 0 })}
+                                    className="w-12 px-1 border rounded text-xs"
+                                  />
+                                </div>
+                              ) : (
+                                <span onClick={() => setEditingTransactionId(trans.id)} className="cursor-pointer">
+                                  {trans.paperColor}:{trans.paperQuantity}
+                                </span>
+                              )
+                            ) : editingTransactionId === trans.id ? (
+                              <select
+                                value={trans.type}
+                                onChange={(e) => editTransaction(trans.id, { 
+                                  type: e.target.value as "cash" | "paper" | "inventory",
+                                  paperColor: e.target.value === "paper" ? trans.paperColor : undefined,
+                                  paperQuantity: e.target.value === "paper" ? trans.paperQuantity : undefined
+                                })}
+                                className="w-20 px-1 border rounded text-xs"
+                              >
+                                <option value="cash">Cash</option>
+                                <option value="inventory">Inventory</option>
+                                <option value="paper">Paper</option>
+                              </select>
+                            ) : (
+                              <span 
+                                onClick={() => setEditingTransactionId(trans.id)} 
+                                className="cursor-pointer"
+                              >
+                                {trans.type === "inventory" ? "Inventory" : trans.type === "paper" ? "Paper" : "Cash"}
+                              </span>
+                            )}
                           </td>
                           <td className="px-1 py-0.5 text-xs">
-                            {trans.reason || ""}
+                            {editingTransactionId === trans.id ? (
+                              <input
+                                type="text"
+                                value={trans.reason || ""}
+                                onChange={(e) => editTransaction(trans.id, { reason: e.target.value })}
+                                className="w-full px-1 border rounded text-xs"
+                              />
+                            ) : (
+                              <span onClick={() => setEditingTransactionId(trans.id)} className="cursor-pointer">
+                                {trans.reason || ""}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-1 py-0.5 text-xs">
+                            {trans.pending ? (
+                              <span 
+                                onClick={() => completePendingTransaction(trans.id)}
+                                className="cursor-pointer text-yellow-600 hover:text-yellow-800"
+                              >
+                                {trans.arrivalTime ? (
+                                  <>
+                                    Pending ({Math.max(0, Math.ceil((trans.arrivalTime - currentTime) / 1000))}s)
+                                  </>
+                                ) : "Pending"}
+                              </span>
+                            ) : (
+                              <span className="text-green-600">✓</span>
+                            )}
+                          </td>
+                          <td className="px-1 py-0.5 text-center">
+                            {editingTransactionId === trans.id ? (
+                              <button
+                                onClick={() => setEditingTransactionId(null)}
+                                className="px-1 py-0.5 bg-green-500 text-white rounded text-xs"
+                              >
+                                ✓
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => deleteTransaction(trans.id)}
+                                className="px-1 py-0.5 text-gray-500 hover:text-gray-700 text-xs"
+                              >
+                                ×
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1021,7 +1193,7 @@ function App() {
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="Amount"
+                    placeholder="Revenue"
                     className="flex-1 px-1 py-0.5 border rounded text-xs"
                     id="cashAmount"
                   />
@@ -1054,7 +1226,7 @@ function App() {
                             "cashReason",
                           ) as HTMLInputElement
                         ).value || "Cash transaction";
-                      const affectsInventory = (
+                      const isInventory = (
                         document.getElementById(
                           "affectsInventory",
                         ) as HTMLInputElement
@@ -1063,9 +1235,7 @@ function App() {
                         addTransaction(
                           amount,
                           reason,
-                          undefined,
-                          undefined,
-                          affectsInventory,
+                          isInventory ? "inventory" : "cash",
                         );
                         (
                           document.getElementById(
@@ -1090,7 +1260,7 @@ function App() {
                   </button>
                 </div>
 
-                <div className="flex gap-1">
+                <div className="flex flex-wrap gap-1">
                   <input
                     type="number"
                     placeholder="Qty"
@@ -1118,7 +1288,7 @@ function App() {
                           document.getElementById(
                             "paperCost",
                           ) as HTMLInputElement
-                        ).value = (qty * color.price).toFixed(2);
+                        ).value = (qty * color.basePrice).toFixed(2);
                       }
                     }}
                   />
@@ -1146,7 +1316,7 @@ function App() {
                           document.getElementById(
                             "paperCost",
                           ) as HTMLInputElement
-                        ).value = (qty * color.price).toFixed(2);
+                        ).value = (qty * color.basePrice).toFixed(2);
                       }
                     }}
                   />
@@ -1159,15 +1329,22 @@ function App() {
                     type="number"
                     step="0.01"
                     placeholder="Cost"
-                    className="w-20 px-1 py-0.5 border rounded text-xs bg-gray-100"
+                    className="w-20 px-1 py-0.5 border rounded text-xs"
                     id="paperCost"
-                    readOnly
                   />
                   <input
                     type="text"
                     placeholder="Reason (optional)"
                     className="flex-1 px-1 py-0.5 border rounded text-xs"
                     id="paperReason"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Mins"
+                    defaultValue="10"
+                    className="w-16 px-1 py-0.5 border rounded text-xs"
+                    id="paperDeliveryMins"
+                    title="Delivery time in minutes"
                   />
                   <button
                     onClick={() => {
@@ -1192,21 +1369,27 @@ function App() {
                         return;
                       }
 
-                      if (!qty || qty <= 0) {
-                        alert("Please enter a valid quantity");
-                        return;
-                      }
+                      // Allow any quantity including 0 (for theft) or negative (for returns)
 
-                      const cost = -Math.abs(qty * colorMatch.price);
+                      const costInput = parseFloat(
+                        (document.getElementById("paperCost") as HTMLInputElement).value
+                      );
+                      const cost = costInput ? -Math.abs(costInput) : -Math.abs(qty * colorMatch.basePrice);
                       const reason =
                         (
                           document.getElementById(
                             "paperReason",
                           ) as HTMLInputElement
                         ).value || `Bought ${qty} sheets of ${colorMatch.name}`;
+                      
+                      // Get delivery time in minutes and convert to milliseconds
+                      const deliveryMins = parseFloat(
+                        (document.getElementById("paperDeliveryMins") as HTMLInputElement).value
+                      ) || 10;
+                      const deliveryMs = deliveryMins * 60 * 1000;
 
-                      // Allow buying even with negative cash
-                      addTransaction(cost, reason, colorMatch.code, qty);
+                      // Create pending transaction for paper purchases
+                      addTransaction(cost, reason, "paper", colorMatch.code, qty, undefined, true, deliveryMs);
                       startCooldownTimer(cooldownTimer, buyingCooldown, setBuyingCooldown, setCooldownTimer);
 
                       // Clear form
