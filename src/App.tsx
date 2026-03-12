@@ -45,11 +45,27 @@ import {
   type SchedulerSuggestionResult,
 } from "./utils/strategyPlanner";
 import {
-  estimatePlanTotalProfit,
+  estimateLitePlanTotalProfit,
   type PlanForecastResult,
 } from "./utils/orderForecasting";
 
 type ViewType = "operations" | "station1" | "station2" | "station3";
+const SCHEDULER_ENABLED_STORAGE_KEY = "production-game/device-enable-scheduler";
+const LITE_FORECAST_ENABLED_STORAGE_KEY =
+  "production-game/device-enable-lite-forecast";
+
+function getStoredBoolean(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  const value = window.localStorage.getItem(key);
+  if (value === null) {
+    return fallback;
+  }
+
+  return value === "1";
+}
 
 function getSyncStatusClass(state: string): string {
   switch (state) {
@@ -116,13 +132,13 @@ function formatSuccessRate(schedule: RankedScheduleCandidate | null): string {
     return "n/a";
   }
 
-  const averageSuccessProbability =
-    schedule.orderEvaluations.reduce(
-      (sum, evaluation) => sum + evaluation.successProbability,
-      0,
-    ) / schedule.orderEvaluations.length;
+  const planSuccessProbability = schedule.orderEvaluations.reduce(
+    (product, evaluation) =>
+      product * Math.min(1, Math.max(0, evaluation.successProbability)),
+    1,
+  );
 
-  return `${(averageSuccessProbability * 100).toFixed(0)}%`;
+  return `${(planSuccessProbability * 100).toFixed(1)}%`;
 }
 
 interface PaperRequirementEntry {
@@ -247,6 +263,16 @@ function App() {
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const schedulerTimeBucket = Math.floor(currentTime / 30000) * 30000;
+  const liteForecastMinuteBucket = Math.floor(currentTime / 60000) * 60000;
+  const liteForecastTimeoutRef = useRef<number | null>(null);
+  const liteForecastIdleCallbackRef = useRef<number | null>(null);
+  const lastLiteForecastMinuteBucketRef = useRef<number | null>(null);
+  const [schedulerEnabled, setSchedulerEnabled] = useState(() =>
+    getStoredBoolean(SCHEDULER_ENABLED_STORAGE_KEY, true),
+  );
+  const [liteForecastEnabled, setLiteForecastEnabled] = useState(() =>
+    getStoredBoolean(LITE_FORECAST_ENABLED_STORAGE_KEY, true),
+  );
   const syncStatus = useAmplifySharedGameState({
     teamId,
     orders,
@@ -559,6 +585,43 @@ function App() {
   }, []);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      SCHEDULER_ENABLED_STORAGE_KEY,
+      schedulerEnabled ? "1" : "0",
+    );
+  }, [schedulerEnabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      LITE_FORECAST_ENABLED_STORAGE_KEY,
+      liteForecastEnabled ? "1" : "0",
+    );
+  }, [liteForecastEnabled]);
+
+  useEffect(() => {
+    return () => {
+      if (liteForecastTimeoutRef.current !== null) {
+        window.clearTimeout(liteForecastTimeoutRef.current);
+        liteForecastTimeoutRef.current = null;
+      }
+
+      if (
+        liteForecastIdleCallbackRef.current !== null &&
+        typeof window !== "undefined" &&
+        "cancelIdleCallback" in window
+      ) {
+        window.cancelIdleCallback(liteForecastIdleCallbackRef.current);
+        liteForecastIdleCallbackRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!schedulerEnabled || currentView !== "operations") {
+      setSchedulerSuggestions(null);
+      return;
+    }
+
     setSchedulerSuggestions(
       buildSchedulerSuggestions({
         orders,
@@ -579,6 +642,8 @@ function App() {
       }),
     );
   }, [
+    currentView,
+    schedulerEnabled,
     orders,
     paperInventory,
     safetyStock,
@@ -591,7 +656,29 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (!schedulerSuggestions) {
+    const clearScheduledLiteForecast = () => {
+      if (liteForecastTimeoutRef.current !== null) {
+        window.clearTimeout(liteForecastTimeoutRef.current);
+        liteForecastTimeoutRef.current = null;
+      }
+
+      if (
+        liteForecastIdleCallbackRef.current !== null &&
+        typeof window !== "undefined" &&
+        "cancelIdleCallback" in window
+      ) {
+        window.cancelIdleCallback(liteForecastIdleCallbackRef.current);
+        liteForecastIdleCallbackRef.current = null;
+      }
+    };
+
+    if (
+      !schedulerSuggestions ||
+      !schedulerEnabled ||
+      !liteForecastEnabled ||
+      currentView !== "operations"
+    ) {
+      clearScheduledLiteForecast();
       setPlanForecastSummaries({
         currentPlan: null,
         bestPlan: null,
@@ -599,44 +686,71 @@ function App() {
       return;
     }
 
-    const stations = gameState.getStationManager().getAllStations();
-    const forecastingContext = {
-      orders,
-      scheduleOrderIds,
-      paperInventory,
-      parameters: {
-        failureFineRatio,
-        paperDeliverySeconds,
-        safetyStock,
-        workstationSpeed,
-        greedometer,
-        forecastSpeed,
-      },
-      stations,
-      currentTime: schedulerTimeBucket,
-      calculatePaperCurrentWorth: (paperColor: Order["paperColor"]) =>
-        gameState.calculatePaperCurrentWorth(paperColor),
-    };
+    clearScheduledLiteForecast();
 
-    setPlanForecastSummaries({
-      currentPlan: estimatePlanTotalProfit(
-        forecastingContext,
-        schedulerSuggestions.currentSchedule,
-        {
-          simulationRuns: 12,
-          randomSeed: 11,
-        },
-      ),
-      bestPlan: estimatePlanTotalProfit(
-        forecastingContext,
-        schedulerSuggestions.bestSuggestion,
-        {
-          simulationRuns: 12,
-          randomSeed: 97,
-        },
-      ),
-    });
+    const isMinuteTick =
+      lastLiteForecastMinuteBucketRef.current !== liteForecastMinuteBucket;
+    lastLiteForecastMinuteBucketRef.current = liteForecastMinuteBucket;
+    const delayMs = isMinuteTick
+      ? 0
+      : planForecastSummaries.currentPlan || planForecastSummaries.bestPlan
+        ? 60_000
+        : 0;
+
+    liteForecastTimeoutRef.current = window.setTimeout(() => {
+      liteForecastTimeoutRef.current = null;
+
+      const computeForecastSummaries = () => {
+        const stations = gameState.getStationManager().getAllStations();
+        const forecastingContext = {
+          orders,
+          scheduleOrderIds,
+          paperInventory,
+          parameters: {
+            failureFineRatio,
+            paperDeliverySeconds,
+            safetyStock,
+            workstationSpeed,
+            greedometer,
+            forecastSpeed,
+          },
+          stations,
+          currentTime: schedulerTimeBucket,
+          calculatePaperCurrentWorth: (paperColor: Order["paperColor"]) =>
+            gameState.calculatePaperCurrentWorth(paperColor),
+        };
+
+        setPlanForecastSummaries({
+          currentPlan: estimateLitePlanTotalProfit(
+            forecastingContext,
+            schedulerSuggestions.currentSchedule,
+          ),
+          bestPlan: estimateLitePlanTotalProfit(
+            forecastingContext,
+            schedulerSuggestions.bestSuggestion,
+          ),
+        });
+      };
+
+      if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+        liteForecastIdleCallbackRef.current = window.requestIdleCallback(
+          () => {
+            liteForecastIdleCallbackRef.current = null;
+            computeForecastSummaries();
+          },
+          { timeout: 1500 },
+        );
+        return;
+      }
+
+      computeForecastSummaries();
+    }, delayMs);
+
+    return clearScheduledLiteForecast;
   }, [
+    currentView,
+    liteForecastEnabled,
+    liteForecastMinuteBucket,
     colourLoveMultiplier,
     failureFineRatio,
     forecastSpeed,
@@ -645,6 +759,7 @@ function App() {
     paperInventory,
     paperDeliverySeconds,
     safetyStock,
+    schedulerEnabled,
     scheduleOrderIds,
     schedulerSuggestions,
     schedulerTimeBucket,
@@ -1649,7 +1764,7 @@ function App() {
                 )}
 
                 <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
-                  Paper delivery is {paperDeliverySeconds} seconds ({paperDeliverySeconds / 60} minutes). Buying cooldown is{" "}
+                  Delivery / pending time is {paperDeliverySeconds} seconds ({paperDeliverySeconds / 60} minutes). Buying cooldown is{" "}
                   {buyingCooldown / 60} minutes. Suggested schedule timing now
                   includes procurement delay when extra paper must be bought.
                 </div>
@@ -1693,54 +1808,70 @@ function App() {
                         )}
                       </div>
                       <div>
-                        Success:{" "}
+                        Plan Success:{" "}
                         {formatSuccessRate(
                           schedulerSuggestions?.bestSuggestion ?? null,
                         )}
                       </div>
                       <div>
-                        Total:{" "}
+                        Expected Total Profit:{" "}
                         {formatCurrency(
                           planForecastSummaries.bestPlan?.expectedTotalProfit ?? 0,
+                        )}
+                      </div>
+                      <div>
+                        Idle £/min:{" "}
+                        {formatCurrency(
+                          planForecastSummaries.bestPlan?.expectedProfitPerIdleMinute ?? 0,
                         )}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700">
-                  <div className="font-semibold text-gray-800">Current Plan</div>
-                  <div>{describeSchedule(schedulerSuggestions?.currentSchedule ?? null)}</div>
-                  <div className="mt-1 flex flex-wrap gap-3 text-gray-600">
-                    <span>
-                      Profit: £
-                      {schedulerSuggestions?.currentSchedule?.expectedProfit.toFixed(2) ??
-                        "0.00"}
-                    </span>
-                    <span>
-                      Busy:{" "}
-                      {formatDurationCompact(
-                        schedulerSuggestions?.currentSchedule?.expectedBusyMs ?? 0,
-                      )}
-                    </span>
-                    <span>
-                      Rate:{" "}
-                      {formatProfitPerSecond(
-                        schedulerSuggestions?.currentSchedule?.profitPerSecond ?? 0,
-                      )}
-                    </span>
-                    <span>
-                      Success:{" "}
-                      {formatSuccessRate(
-                        schedulerSuggestions?.currentSchedule ?? null,
-                      )}
-                    </span>
-                    <span>
-                      Total:{" "}
-                      {formatCurrency(
-                        planForecastSummaries.currentPlan?.expectedTotalProfit ?? 0,
-                      )}
-                    </span>
+                <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] text-gray-700">
+                      <div className="font-semibold text-gray-800">Current Plan</div>
+                      <div>{describeSchedule(schedulerSuggestions?.currentSchedule ?? null)}</div>
+                    </div>
+                    <div className="text-right text-[11px] text-gray-700">
+                      <div>
+                        Profit: £
+                        {schedulerSuggestions?.currentSchedule?.expectedProfit.toFixed(2) ??
+                          "0.00"}
+                      </div>
+                      <div>
+                        Busy:{" "}
+                        {formatDurationCompact(
+                          schedulerSuggestions?.currentSchedule?.expectedBusyMs ?? 0,
+                        )}
+                      </div>
+                      <div>
+                        Rate:{" "}
+                        {formatProfitPerSecond(
+                          schedulerSuggestions?.currentSchedule?.profitPerSecond ?? 0,
+                        )}
+                      </div>
+                      <div>
+                        Plan Success:{" "}
+                        {formatSuccessRate(
+                          schedulerSuggestions?.currentSchedule ?? null,
+                        )}
+                      </div>
+                      <div>
+                        Expected Total Profit:{" "}
+                        {formatCurrency(
+                          planForecastSummaries.currentPlan?.expectedTotalProfit ?? 0,
+                        )}
+                      </div>
+                      <div>
+                        Idle £/min:{" "}
+                        {formatCurrency(
+                          planForecastSummaries.currentPlan?.expectedProfitPerIdleMinute ?? 0,
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -2366,6 +2497,41 @@ function App() {
                 </div>
               </div>
 
+              <div className="mb-3 grid grid-cols-3 gap-2 text-xs">
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Device Scheduler</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">
+                      Run exhaustive plan search on this device
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={schedulerEnabled}
+                      onChange={(e) => setSchedulerEnabled(e.target.checked)}
+                      className="h-4 w-4 rounded"
+                    />
+                  </div>
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Lite Forecast</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">
+                      Run idle-profit estimates on this device
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={liteForecastEnabled}
+                      onChange={(e) => setLiteForecastEnabled(e.target.checked)}
+                      className="h-4 w-4 rounded"
+                    />
+                  </div>
+                </label>
+                <div className="rounded bg-white p-2 text-gray-500">
+                  Delivery / pending time is controlled below as
+                  <span className="font-medium text-gray-700"> Paper Delivery (s)</span>.
+                </div>
+              </div>
+
               <div className="grid grid-cols-4 gap-2 text-xs">
                 <label className="rounded bg-white p-2">
                   <div className="mb-1 font-medium text-gray-700">Workstation Speed</div>
@@ -2402,7 +2568,7 @@ function App() {
                   />
                 </label>
                 <label className="rounded bg-white p-2">
-                  <div className="mb-1 font-medium text-gray-700">Paper Delivery (s)</div>
+                  <div className="mb-1 font-medium text-gray-700">Paper Delivery / Pending Time (s)</div>
                   <input
                     type="number"
                     value={paperDeliverySeconds}

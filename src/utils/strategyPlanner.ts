@@ -294,7 +294,25 @@ export function evaluateScheduleCandidate(
   context: SchedulerContext,
 ): RankedScheduleCandidate {
   const orderMap = new Map(context.orders.map((order) => [order.id, order]));
-  let cumulativeDistribution: NormalDistribution = { mean: 0, stdDev: 0 };
+  const requiredPapers = buildRequiredPapers(
+    orderIds,
+    orderMap,
+    context.paperInventory,
+    context.parameters.safetyStock,
+    context.transactions,
+    context.currentTime,
+  );
+  const requiresInventoryPurchase = Object.values(requiredPapers).some(
+    (paperRequirement) => paperRequirement.totalNeeded > 0,
+  );
+  const inventoryDelayMs = requiresInventoryPurchase
+    ? (context.buyingCooldownRemainingMs || 0) +
+      context.parameters.paperDeliverySeconds * 1000
+    : 0;
+  let cumulativeDistribution: NormalDistribution = {
+    mean: inventoryDelayMs,
+    stdDev: 0,
+  };
 
   const orderEvaluations = orderIds
     .map((orderId) => orderMap.get(orderId))
@@ -344,23 +362,8 @@ export function evaluateScheduleCandidate(
     (sum, evaluation) => sum + evaluation.expectedValue,
     0,
   );
-  const requiredPapers = buildRequiredPapers(
-    orderIds,
-    orderMap,
-    context.paperInventory,
-    context.parameters.safetyStock,
-    context.transactions,
-    context.currentTime,
-  );
-  const requiresInventoryPurchase = Object.values(requiredPapers).some(
-    (paperRequirement) => paperRequirement.totalNeeded > 0,
-  );
-  const inventoryDelayMs = requiresInventoryPurchase
-    ? (context.buyingCooldownRemainingMs || 0) +
-      context.parameters.paperDeliverySeconds * 1000
-    : 0;
-  const expectedProductionMs = cumulativeDistribution.mean;
-  const expectedBusyMs = expectedProductionMs + inventoryDelayMs;
+  const expectedBusyMs = cumulativeDistribution.mean;
+  const expectedProductionMs = Math.max(0, expectedBusyMs - inventoryDelayMs);
 
   return {
     id: orderIds.join("|") || "empty",

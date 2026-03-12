@@ -10,6 +10,7 @@ import type { Station } from "./station";
 
 const DEFAULT_SIMULATION_RUNS = 32;
 const DEFAULT_FORECAST_HORIZON_MS = 8 * 60 * 60 * 1000;
+const DEFAULT_LITE_FORECAST_HORIZON_MS = 2 * 60 * 60 * 1000;
 const MIN_ARRIVAL_INTERVAL_MS = 60 * 1000;
 
 type ForecastableParameters = Pick<
@@ -90,6 +91,8 @@ export interface PlanForecastResult {
   immediateExpectedProfit: number;
   expectedContinuationProfit: number;
   expectedTotalProfit: number;
+  expectedProfitPerIdleMinute: number;
+  expectedIdleMinutes: number;
   simulationRuns: number;
   horizonMs: number;
 }
@@ -583,7 +586,51 @@ export function estimatePlanTotalProfit(
     immediateExpectedProfit: plan.expectedProfit,
     expectedContinuationProfit,
     expectedTotalProfit: plan.expectedProfit + expectedContinuationProfit,
+    expectedProfitPerIdleMinute:
+      horizonMs > 0
+        ? expectedContinuationProfit / (horizonMs / 60_000)
+        : 0,
+    expectedIdleMinutes: horizonMs / 60_000,
     simulationRuns,
+    horizonMs,
+  };
+}
+
+export function estimateLitePlanTotalProfit(
+  context: ForecastingContext,
+  plan: RankedScheduleCandidate | null,
+  horizonMs: number = DEFAULT_LITE_FORECAST_HORIZON_MS,
+): PlanForecastResult | null {
+  if (!plan) {
+    return null;
+  }
+
+  const model = buildOrderForecastModel(context);
+  const arrivalMinutes = Math.max(
+    1 / 60,
+    model.arrivalIntervalMs.mean / 60_000,
+  );
+  const processingMinutes = Math.max(
+    1 / 60,
+    model.processingTimeMs.mean / 60_000,
+  );
+  const expectedOrderValue = model.baseProfit.mean;
+  const expectedProfitPerIdleMinute =
+    expectedOrderValue / Math.max(arrivalMinutes, processingMinutes);
+  const remainingIdleMinutes = Math.max(
+    0,
+    (horizonMs - plan.expectedBusyMs) / 60_000,
+  );
+  const expectedContinuationProfit =
+    expectedProfitPerIdleMinute * remainingIdleMinutes;
+
+  return {
+    immediateExpectedProfit: plan.expectedProfit,
+    expectedContinuationProfit,
+    expectedTotalProfit: plan.expectedProfit + expectedContinuationProfit,
+    expectedProfitPerIdleMinute,
+    expectedIdleMinutes: remainingIdleMinutes,
+    simulationRuns: 0,
     horizonMs,
   };
 }
