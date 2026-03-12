@@ -532,6 +532,96 @@ export const VERSES_BY_OCCASION = {
       "Give them hell",
     ],
   },
+  "Father's Birthday": {
+  2: ["Happy birthday, Dad", "You’re not so bad"],
+  4: ["Take a seat", "There’s cake to eat", "Happy birthday, Dad", "You’re not so bad"],
+  6: [
+    "Take a seat",
+    "There’s cake to eat",
+    "Time for cheer",
+    "You’ve gained a year",
+    "Enjoy, Dad",
+    "You’re not so bad",
+  ],
+  },
+
+  "Mother's Birthday": {
+    2: ["Happy birthday, Mother", "You’re like no other"],
+    4: ["Take a seat", "There’s cake to eat", "Happy birthday, Mother", "You’re like no other"],
+    6: [
+      "Take a seat",
+      "There’s cake to eat",
+      "Time for cheer",
+      "You’ve gained a year",
+      "Enjoy, Mother",
+      "You’re like no other",
+    ],
+  },
+
+  "Grandson's Birthday": {
+    2: ["Happy birthday, Grandson", "Have some fun!"],
+    4: ["Time for cheer", "You’ve gained a year!", "Grandson,", "Have fun!"],
+    6: [
+      "Take a seat",
+      "There’s cake to eat",
+      "Time for cheer",
+      "You’ve gained a year",
+      "Grandson,",
+      "Have fun!",
+    ],
+  },
+
+  "Grandchild's Birthday": {
+    2: ["Happy birthday, Grandchild", "Go wild!"],
+    4: ["Time for cheer", "You’ve gained a year!", "Go wild,", "Grandchild"],
+    6: [
+      "Take a seat",
+      "There’s cake to eat",
+      "Time for cheer",
+      "You’ve gained a year",
+      "Go wild,",
+      "Grandchild",
+    ],
+  },
+
+  "Specific Birthday": {
+    2: ["XXXXXX, time for cheer", "You’ve gained a year"],
+    4: ["XXXXX, take a seat", "There’s cake to eat", "Time for cheer", "You’ve gained a year"],
+    6: [
+      "XXXXXX, take a seat",
+      "There’s cake to eat",
+      "Time for cheer",
+      "You’ve gained a year",
+      "Happy birthday",
+      "What more to say?",
+    ],
+  },
+
+  "Ramadan": {
+    2: ["Happy month of fasting", "The Quran, everlasting"],
+    4: ["Happy month of fasting", "The Quran, everlasting", "Lights hung", "Prayers sung"],
+    6: [
+      "Happy month of fasting",
+      "The Quran, everlasting",
+      "Lights hung",
+      "Prayers sung",
+      "Time for cheer",
+      "Ramadan’s here",
+    ],
+  },
+
+  "Eid": {
+    2: ["Happy Ramadan end,", "My friend"],
+    4: ["Take a seat", "There’s food to eat", "Happy Ramadan end,", "My friend"],
+    6: [
+      "Take a seat",
+      "There’s food to eat",
+      "Time for cheer",
+      "Eid is here!",
+      "Happy Ramadan end,",
+      "My friend",
+    ],
+  },
   "16th Birthday": {
     2: ["16", "Party machine"],
     4: ["Time for cheer", "You’ve gained a year!", "16", "Party machine"],
