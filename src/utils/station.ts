@@ -1,4 +1,5 @@
 // Production station definitions and utilities
+import { createDefaultStations } from '../data/defaultStationData';
 
 // Define a minimal Order interface to avoid circular dependency
 // This matches the Order type in gameState.ts but only includes fields needed here
@@ -131,30 +132,13 @@ export class StationManager {
   }
 
   private initializeDefaultStations(): void {
-    // TODO: Add your default station configurations here
-    // Example station with method implementation:
-    const exampleStation: Station = {
-      id: "station1_cutting",
-      name: "Cutting Station",
-      rawStationTaskTimes: [],
-      itemProcesingTime: { mean: 30, stdDev: 5 }, // Default 30 sec per item
-      sizeDistributions: new Map(),
-      batchCapacity: 10,
-      setupTime: 60,
-      itemsLeftToProcessUntilIdle: 0,
-      speedMultiplier: 1.0,
-      generateProcessingTimes: function () {
-        // Get standard time ratio from gameState when called
-        const standardTimeRatio = 1.0; // TODO: get from gameState.getParameters().standardTimeRatio
-        this.sizeDistributions = generateStationProcessingTimes(
-          this.rawStationTaskTimes,
-          standardTimeRatio,
-        );
-        return this.sizeDistributions;
-      },
-    };
-
-    // this.stations.set("station1_cutting", exampleStation);
+    // Initialize the default stations with our abstracted model
+    // These stations use effective processing times to handle the complexity
+    // of Station 1 workers helping Station 2 after finishing folding
+    const defaultStations = createDefaultStations();
+    defaultStations.forEach(station => {
+      this.stations.set(station.id, station);
+    });
   }
 
   getStation(id: string): Station | undefined {

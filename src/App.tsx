@@ -9,6 +9,7 @@ import {
   deleteRecentOrder,
   updateOrder,
 } from "./utils/orders";
+import { ProductionSchedule } from "./components/ProductionSchedule";
 import type {
   PaperInventory,
   Transaction,
@@ -411,6 +412,9 @@ function App() {
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      ID
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Time
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
@@ -448,6 +452,11 @@ function App() {
                       key={order.id}
                       className={`border-b hover:bg-gray-50 ${getRowColorClass(order)}`}
                     >
+                      <td className="px-2 py-1">
+                        <span className="font-mono text-xs text-gray-500">
+                          {order.id.slice(-6)}
+                        </span>
+                      </td>
                       <td className="px-2 py-1">
                         <input
                           type="text"
@@ -753,6 +762,9 @@ function App() {
                 <tfoot className="bg-gray-50 border-t">
                   <tr>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      ID
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Time
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
@@ -998,6 +1010,14 @@ function App() {
       {/* Full-width sections below the two panes */}
       <div className="bg-white border-t border-gray-300">
         <div className="p-2">
+          {/* Production Schedule */}
+          <div className="mb-4">
+            <ProductionSchedule 
+              orders={orders} 
+              setOrders={setOrders}
+              currentTime={currentTime}
+            />
+          </div>
           <h2 className="text-base font-bold text-gray-800 mb-2">
             Inventory Management System
           </h2>

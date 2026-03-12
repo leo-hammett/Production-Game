@@ -168,6 +168,34 @@ export const updateOrder = (
     }
   }
   
+  // Handle setting startTime and dueTime when order moves to active status
+  if (field === "status") {
+    const activeStatuses = ["ordered", "pending_inventory", "WIP", "sent", "approved"];
+    const inactiveStatuses = ["passive", "failed", "deleted", "other"];
+    
+    const updatedOrder = { ...order, [field]: value };
+    
+    // If moving from inactive to active status, set startTime and dueTime
+    if (inactiveStatuses.includes(order.status) && activeStatuses.includes(value as string)) {
+      if (!updatedOrder.startTime) {
+        updatedOrder.startTime = Date.now();
+      }
+      if (!updatedOrder.dueTime && updatedOrder.leadTime > 0) {
+        updatedOrder.dueTime = updatedOrder.startTime + (updatedOrder.leadTime * 24 * 60 * 60 * 1000);
+      }
+    }
+    
+    // If moving from active to inactive status, clear startTime and dueTime
+    if (activeStatuses.includes(order.status) && inactiveStatuses.includes(value as string)) {
+      delete updatedOrder.startTime;
+      delete updatedOrder.dueTime;
+    }
+    
+    return orders.map((o) =>
+      o.id === id ? updatedOrder : o,
+    );
+  }
+  
   return orders.map((o) =>
     o.id === id ? { ...o, [field]: value } : o,
   );
