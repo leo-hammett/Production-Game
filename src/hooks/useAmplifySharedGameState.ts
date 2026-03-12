@@ -43,6 +43,24 @@ interface AmplifySharedGameStateBindings {
   setSafetyStock: React.Dispatch<React.SetStateAction<number>>;
   workstationSpeed: number;
   setWorkstationSpeed: React.Dispatch<React.SetStateAction<number>>;
+  buyingCooldown: number;
+  setBuyingCooldown: React.Dispatch<React.SetStateAction<number>>;
+  paperDeliverySeconds: number;
+  setPaperDeliverySeconds: React.Dispatch<React.SetStateAction<number>>;
+  sellMarkdown: number;
+  setSellMarkdown: React.Dispatch<React.SetStateAction<number>>;
+  failureFineRatio: number;
+  setFailureFineRatio: React.Dispatch<React.SetStateAction<number>>;
+  colourLoveMultiplier: number;
+  setColourLoveMultiplier: React.Dispatch<React.SetStateAction<number>>;
+  whiteLoveMultiplier: number;
+  setWhiteLoveMultiplier: React.Dispatch<React.SetStateAction<number>>;
+  standardTimeRatio: number;
+  setStandardTimeRatio: React.Dispatch<React.SetStateAction<number>>;
+  greedometer: number;
+  setGreedometer: React.Dispatch<React.SetStateAction<number>>;
+  forecastSpeed: number;
+  setForecastSpeed: React.Dispatch<React.SetStateAction<number>>;
   stationSpeedMultipliers: StationSpeedMultipliers;
   setStationSpeedMultipliers: React.Dispatch<
     React.SetStateAction<StationSpeedMultipliers>
@@ -123,6 +141,15 @@ export function useAmplifySharedGameState(
       bindings.setCash(nextState.cash);
       bindings.setSafetyStock(nextState.parameters.safetyStock);
       bindings.setWorkstationSpeed(nextState.parameters.workstationSpeed);
+      bindings.setBuyingCooldown(nextState.parameters.buyingCooldown);
+      bindings.setPaperDeliverySeconds(nextState.parameters.paperDeliverySeconds);
+      bindings.setSellMarkdown(nextState.parameters.sellMarkdown);
+      bindings.setFailureFineRatio(nextState.parameters.failureFineRatio);
+      bindings.setColourLoveMultiplier(nextState.parameters.colourLoveMultiplier);
+      bindings.setWhiteLoveMultiplier(nextState.parameters.whiteLoveMultiplier);
+      bindings.setStandardTimeRatio(nextState.parameters.standardTimeRatio);
+      bindings.setGreedometer(nextState.parameters.greedometer);
+      bindings.setForecastSpeed(nextState.parameters.forecastSpeed);
       bindings.setStationSpeedMultipliers(
         nextState.parameters.stationSpeedMultipliers,
       );
@@ -326,12 +353,21 @@ export function useAmplifySharedGameState(
     };
   }, [
     bindings.cash,
+    bindings.buyingCooldown,
+    bindings.colourLoveMultiplier,
+    bindings.failureFineRatio,
+    bindings.forecastSpeed,
+    bindings.greedometer,
     bindings.orders,
     bindings.paperInventory,
+    bindings.paperDeliverySeconds,
     bindings.safetyStock,
+    bindings.sellMarkdown,
     bindings.stationSpeedMultipliers,
+    bindings.standardTimeRatio,
     bindings.teamId,
     bindings.transactions,
+    bindings.whiteLoveMultiplier,
     bindings.workstationSpeed,
     isConfigured,
     syncVersion,

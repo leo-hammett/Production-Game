@@ -1,6 +1,4 @@
 import type { GameParameters, Order, PaperInventory } from "./gameState";
-import { FAILURE_FINE_RATIO } from "./gameState";
-import { PAPER_DELIVERY_MS } from "./gameConstants";
 import { normalizeScheduleOrderIds } from "./orders";
 import type { Transaction } from "./gameState";
 import {
@@ -67,7 +65,10 @@ export interface SchedulerContext {
   scheduleOrderIds: string[];
   paperInventory: PaperInventory;
   transactions?: Transaction[];
-  parameters: Pick<GameParameters, "safetyStock" | "workstationSpeed">;
+  parameters: Pick<
+    GameParameters,
+    "failureFineRatio" | "paperDeliverySeconds" | "safetyStock" | "workstationSpeed"
+  >;
   stations: Station[];
   currentTime: number;
   buyingCooldownRemainingMs?: number;
@@ -140,8 +141,11 @@ export function getOptionalOrders(orders: Order[]): Order[] {
   );
 }
 
-export function calculateCostOfFailure(order: Order): number {
-  return order.price * FAILURE_FINE_RATIO;
+export function calculateCostOfFailure(
+  order: Order,
+  failureFineRatio: number,
+): number {
+  return order.price * failureFineRatio;
 }
 
 export function estimateOrderTimeDistribution(
@@ -183,7 +187,21 @@ export function estimateOrderTimeDistribution(
   });
 }
 
-function getDueTime(order: Order): number {
+function getSameDayTimestamp(sourceTime: number, referenceTime: number): number {
+  const source = new Date(sourceTime);
+  const reference = new Date(referenceTime);
+
+  reference.setHours(
+    source.getHours(),
+    source.getMinutes(),
+    source.getSeconds(),
+    source.getMilliseconds(),
+  );
+
+  return reference.getTime();
+}
+
+function getDueTime(order: Order, referenceTime: number): number {
   if (order.dueTime !== undefined) {
     return order.dueTime;
   }
@@ -192,7 +210,7 @@ function getDueTime(order: Order): number {
     return Infinity;
   }
 
-  return order.orderTime + order.leadTime * 60 * 1000;
+  return getSameDayTimestamp(order.orderTime, referenceTime) + order.leadTime * 60 * 1000;
 }
 
 function buildRequiredPapers(
@@ -292,7 +310,7 @@ export function evaluateScheduleCandidate(
         timeDistribution,
       );
 
-      const dueTime = getDueTime(order);
+      const dueTime = getDueTime(order, context.currentTime);
       const timeRemaining =
         dueTime === Infinity
           ? Infinity
@@ -304,7 +322,10 @@ export function evaluateScheduleCandidate(
       const baseProfit =
         order.price -
         order.quantity * context.calculatePaperCurrentWorth(order.paperColor);
-      const failureFine = calculateCostOfFailure(order);
+      const failureFine = calculateCostOfFailure(
+        order,
+        context.parameters.failureFineRatio,
+      );
       const expectedValue =
         baseProfit * successProbability -
         failureFine * (1 - successProbability);
@@ -335,7 +356,8 @@ export function evaluateScheduleCandidate(
     (paperRequirement) => paperRequirement.totalNeeded > 0,
   );
   const inventoryDelayMs = requiresInventoryPurchase
-    ? (context.buyingCooldownRemainingMs || 0) + PAPER_DELIVERY_MS
+    ? (context.buyingCooldownRemainingMs || 0) +
+      context.parameters.paperDeliverySeconds * 1000
     : 0;
   const expectedProductionMs = cumulativeDistribution.mean;
   const expectedBusyMs = expectedProductionMs + inventoryDelayMs;

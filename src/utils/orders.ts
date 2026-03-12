@@ -8,7 +8,7 @@ import {
   PaperColor, 
   PAPER_COLORS, 
   PAPER_COLOR_MAP, 
-  FAILURE_FINE_RATIO
+  gameState,
 } from './gameState';
 
 // Order constants
@@ -197,10 +197,11 @@ export const updateOrder = (
   if (field === "status") {
     const oldStatus = order.status;
     const newStatus = value as OrderStatus;
+    const failureFineRatio = gameState.getParameters().failureFineRatio;
     
     // `order.price` is the total order value, not a per-unit amount.
     const orderRevenue = order.price;
-    const failureFine = orderRevenue * FAILURE_FINE_RATIO;
+    const failureFine = orderRevenue * failureFineRatio;
     
     // If changing to failed status, add a fine transaction
     if (newStatus === "failed" && oldStatus !== "failed") {
@@ -209,7 +210,7 @@ export const updateOrder = (
         timestamp: new Date(),
         amount: -failureFine,
         type: "cash",
-        reason: `Order failure fine (${FAILURE_FINE_RATIO * 100}% of £${orderRevenue.toFixed(2)} total): ${order.quantity}x ${order.occasion || 'cards'}`,
+        reason: `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total): ${order.quantity}x ${order.occasion || 'cards'}`,
         orderId: order.id,
       };
       setTransactions(prev => [...prev, fineTransaction]);

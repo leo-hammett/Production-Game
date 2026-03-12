@@ -42,24 +42,24 @@ export function StationView({
       order.status !== "approved" &&
       order.status !== "failed",
   );
-  const topPriorityOrder =
-    stationQueue[0] || null;
-  const selectedOrderStillVisible = currentOrderId
-    ? stationQueue.some((order) => order.id === currentOrderId)
-    : false;
+  const stationQueueKey = stationQueue.map((order) => order.id).join("|");
 
   useEffect(() => {
-    if (!topPriorityOrder) {
-      if (currentOrderId !== null) {
-        setCurrentOrderId(null);
+    setCurrentOrderId((currentSelection) => {
+      if (!stationQueue.length) {
+        return null;
       }
-      return;
-    }
 
-    if (!currentOrderId || !selectedOrderStillVisible) {
-      setCurrentOrderId(topPriorityOrder.id);
-    }
-  }, [currentOrderId, selectedOrderStillVisible, topPriorityOrder]);
+      if (
+        currentSelection &&
+        stationQueue.some((order) => order.id === currentSelection)
+      ) {
+        return currentSelection;
+      }
+
+      return stationQueue[0].id;
+    });
+  }, [stationQueueKey]);
 
   const currentOrder = orders.find(o => o.id === currentOrderId);
   const stationSpeed = stationSpeedMultipliers[stationKey] ?? 1;

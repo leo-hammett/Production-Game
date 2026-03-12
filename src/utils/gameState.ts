@@ -3,7 +3,11 @@ import {
   StationManager,
   type StationSpeedMultipliers,
 } from "./station";
-import { STANDARD_TIME_RATIO } from "./gameConstants";
+import {
+  BUYING_COOLDOWN_SECONDS,
+  PAPER_DELIVERY_SECONDS,
+  STANDARD_TIME_RATIO,
+} from "./gameConstants";
 import { Schedule } from "./strategyPlanner";
 
 // Asset-related types (moved from assets.ts)
@@ -94,6 +98,7 @@ export interface GameParameters {
   stationSpeedMultipliers: StationSpeedMultipliers;
   safetyStock: number;
   buyingCooldown: number;
+  paperDeliverySeconds: number;
   buyingCooldownEndTime: number | null; // Unix timestamp when cooldown ends (null = no cooldown)
   sellMarkdown: number;
   failureFineRatio: number;
@@ -157,7 +162,8 @@ class GameStateManager {
         workstationSpeed: 1.0,
         stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
         safetyStock: 12,
-        buyingCooldown: 0,
+        buyingCooldown: BUYING_COOLDOWN_SECONDS,
+        paperDeliverySeconds: PAPER_DELIVERY_SECONDS,
         buyingCooldownEndTime: null,
         sellMarkdown: 0.7,
         failureFineRatio: 0.3,
@@ -505,7 +511,7 @@ class GameStateManager {
   ): Transaction {
     const now = Date.now();
     return {
-      id: now.toString(),
+      id: `${now}-${crypto.randomUUID()}`,
       timestamp: new Date(),
       amount,
       type: paperColor ? "paper" : type, // If paperColor is set, it's always "paper"
@@ -571,7 +577,8 @@ class GameStateManager {
         workstationSpeed: 1.0,
         stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
         safetyStock: 12,
-        buyingCooldown: 0,
+        buyingCooldown: BUYING_COOLDOWN_SECONDS,
+        paperDeliverySeconds: PAPER_DELIVERY_SECONDS,
         buyingCooldownEndTime: null,
         sellMarkdown: 0.7,
         failureFineRatio: 0.3,

@@ -35,11 +35,6 @@ import {
 } from "./utils/ui";
 import { DEFAULT_TEAM_ID, TEAM_ID_STORAGE_KEY } from "./utils/sharedGameState";
 import {
-  BUYING_COOLDOWN_SECONDS,
-  PAPER_DELIVERY_MINUTES,
-  PAPER_DELIVERY_MS,
-} from "./utils/gameConstants";
-import {
   DEFAULT_STATION_SPEED_MULTIPLIERS,
   type StationSpeedMultipliers,
 } from "./utils/station";
@@ -49,6 +44,10 @@ import {
   type RankedScheduleCandidate,
   type SchedulerSuggestionResult,
 } from "./utils/strategyPlanner";
+import {
+  estimatePlanTotalProfit,
+  type PlanForecastResult,
+} from "./utils/orderForecasting";
 
 type ViewType = "operations" | "station1" | "station2" | "station3";
 
@@ -108,6 +107,10 @@ function formatProfitPerSecond(value: number): string {
   return `£${value.toFixed(Math.abs(value) >= 1 ? 2 : 3)}/s`;
 }
 
+function formatCurrency(value: number): string {
+  return `£${value.toFixed(2)}`;
+}
+
 function formatSuccessRate(schedule: RankedScheduleCandidate | null): string {
   if (!schedule || !schedule.orderEvaluations.length) {
     return "n/a";
@@ -129,6 +132,11 @@ interface PaperRequirementEntry {
   totalNeeded: number;
   currentInventory: number;
   pendingDelivery: number;
+}
+
+interface PlanForecastSummaries {
+  currentPlan: PlanForecastResult | null;
+  bestPlan: PlanForecastResult | null;
 }
 
 const STATION_CONTROL_CONFIG: Array<{
@@ -196,10 +204,46 @@ function App() {
   });
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [cash, setCash] = useState(0); // Game starts with no cash
-  const [safetyStock, setSafetyStock] = useState(12);
-  const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
+  const initialParameters = gameState.getParameters();
+  const [safetyStock, setSafetyStock] = useState(initialParameters.safetyStock);
+  const [workstationSpeed, setWorkstationSpeed] = useState(
+    initialParameters.workstationSpeed,
+  );
+  const [buyingCooldown, setBuyingCooldown] = useState(
+    initialParameters.buyingCooldown,
+  );
+  const [paperDeliverySeconds, setPaperDeliverySeconds] = useState(
+    initialParameters.paperDeliverySeconds,
+  );
+  const [sellMarkdown, setSellMarkdown] = useState(
+    initialParameters.sellMarkdown,
+  );
+  const [failureFineRatio, setFailureFineRatio] = useState(
+    initialParameters.failureFineRatio,
+  );
+  const [colourLoveMultiplier, setColourLoveMultiplier] = useState(
+    initialParameters.colourLoveMultiplier,
+  );
+  const [whiteLoveMultiplier, setWhiteLoveMultiplier] = useState(
+    initialParameters.whiteLoveMultiplier,
+  );
+  const [standardTimeRatio, setStandardTimeRatio] = useState(
+    initialParameters.standardTimeRatio,
+  );
+  const [greedometer, setGreedometer] = useState(initialParameters.greedometer);
+  const [forecastSpeed, setForecastSpeed] = useState(
+    initialParameters.forecastSpeed,
+  );
   const [stationSpeedMultipliers, setStationSpeedMultipliers] =
-    useState<StationSpeedMultipliers>({ ...DEFAULT_STATION_SPEED_MULTIPLIERS });
+    useState<StationSpeedMultipliers>({
+      ...DEFAULT_STATION_SPEED_MULTIPLIERS,
+      ...initialParameters.stationSpeedMultipliers,
+    });
+  const [planForecastSummaries, setPlanForecastSummaries] =
+    useState<PlanForecastSummaries>({
+      currentPlan: null,
+      bestPlan: null,
+    });
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const schedulerTimeBucket = Math.floor(currentTime / 30000) * 30000;
@@ -217,6 +261,24 @@ function App() {
     setSafetyStock,
     workstationSpeed,
     setWorkstationSpeed,
+    buyingCooldown,
+    setBuyingCooldown,
+    paperDeliverySeconds,
+    setPaperDeliverySeconds,
+    sellMarkdown,
+    setSellMarkdown,
+    failureFineRatio,
+    setFailureFineRatio,
+    colourLoveMultiplier,
+    setColourLoveMultiplier,
+    whiteLoveMultiplier,
+    setWhiteLoveMultiplier,
+    standardTimeRatio,
+    setStandardTimeRatio,
+    greedometer,
+    setGreedometer,
+    forecastSpeed,
+    setForecastSpeed,
     stationSpeedMultipliers,
     setStationSpeedMultipliers,
   });
@@ -253,22 +315,22 @@ function App() {
     }));
   };
 
-  const registerPaperRequirements = (
+  const createPaperPurchaseTransactions = (
     requirements: RequiredPapers | undefined,
     label: string,
-  ) => {
+  ): Transaction[] => {
     if (!requirements) {
-      return;
+      return [];
     }
 
     const requirementEntries = Object.entries(requirements).filter(
       ([, requirement]) => requirement.totalNeeded > 0,
     );
     if (!requirementEntries.length) {
-      return;
+      return [];
     }
 
-    const newTransactions = requirementEntries.map(([colorCode, requirement]) =>
+    return requirementEntries.map(([colorCode, requirement]) =>
       gameState.createTransaction(
         -Math.abs(requirement.totalNeeded * getColorPrice(colorCode)),
         `${label}: buy ${requirement.totalNeeded} ${getColorName(colorCode)} sheets`,
@@ -277,9 +339,19 @@ function App() {
         requirement.totalNeeded,
         undefined,
         true,
-        PAPER_DELIVERY_MS,
+        paperDeliverySeconds * 1000,
       ),
     );
+  };
+
+  const registerPaperRequirements = (
+    requirements: RequiredPapers | undefined,
+    label: string,
+  ) => {
+    const newTransactions = createPaperPurchaseTransactions(requirements, label);
+    if (!newTransactions.length) {
+      return;
+    }
 
     setTransactions((currentTransactions) => [
       ...currentTransactions,
@@ -288,11 +360,10 @@ function App() {
     setCash((currentCash) =>
       currentCash + newTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
     );
-    gameState.startBuyingCooldown(BUYING_COOLDOWN_SECONDS);
+    gameState.startBuyingCooldown(buyingCooldown);
   };
 
-  // Accept suggestions
-  const acceptSuggestions = () => {
+  const acceptAndOrderSuggestedPlan = () => {
     const bestSuggestion = schedulerSuggestions?.bestSuggestion;
     if (!bestSuggestion) {
       return;
@@ -300,10 +371,17 @@ function App() {
 
     const activationTime = Date.now();
     const bestSuggestionIdSet = new Set(bestSuggestion.orderIds);
+    const orderMap = new Map(orders.map((order) => [order.id, order]));
     const availablePaperByColor: Record<string, number> = { ...paperInventory };
-    const nextOrders = orders.map((order) => {
-      if (!bestSuggestionIdSet.has(order.id) || order.status !== "passive") {
-        return order;
+    const nextStatusesByOrderId = new Map<
+      string,
+      { status: OrderStatus; progress: number; startTime: number; dueTime?: number }
+    >();
+
+    bestSuggestion.orderIds.forEach((orderId) => {
+      const order = orderMap.get(orderId);
+      if (!order || order.status !== "passive") {
+        return;
       }
 
       const colorCode = order.paperColor.code;
@@ -313,23 +391,51 @@ function App() {
       }
 
       const startTime = order.startTime ?? activationTime;
-      const nextStatus: OrderStatus = hasInventoryForOrder
-        ? "ordered"
-        : "pending_inventory";
-      return {
-        ...order,
-        status: nextStatus,
-        progress: hasInventoryForOrder ? 1 : 0,
+      nextStatusesByOrderId.set(orderId, {
+        status: hasInventoryForOrder ? "WIP" : "pending_inventory",
+        progress: hasInventoryForOrder ? Math.max(1, order.progress || 0) : 0,
         startTime,
         dueTime:
           order.dueTime ??
           (order.leadTime > 0 ? startTime + order.leadTime * 60 * 1000 : undefined),
+      });
+    });
+
+    const nextOrders = orders.map((order) => {
+      const nextState = nextStatusesByOrderId.get(order.id);
+      if (!bestSuggestionIdSet.has(order.id) || !nextState) {
+        return order;
+      }
+
+      return {
+        ...order,
+        status: nextState.status,
+        progress: nextState.progress,
+        startTime: nextState.startTime,
+        dueTime: nextState.dueTime,
       };
     });
 
+    const paperTransactions = createPaperPurchaseTransactions(
+      bestSuggestion.requiredPapers,
+      "Suggested schedule paper order",
+    );
+
     setOrders(nextOrders);
+    if (paperTransactions.length) {
+      setTransactions((currentTransactions) => [
+        ...currentTransactions,
+        ...paperTransactions,
+      ]);
+      setCash((currentCash) =>
+        currentCash +
+        paperTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      );
+      gameState.startBuyingCooldown(buyingCooldown);
+    }
     setScheduleOrderIds(bestSuggestion.orderIds);
     gameState.updateScheduleOrderIds(bestSuggestion.orderIds);
+    setClearedSuggestedPaperPlanId(null);
   };
 
   // Handle pane resizing
@@ -416,9 +522,31 @@ function App() {
     gameState.updateParameters({
       workstationSpeed,
       safetyStock,
+      buyingCooldown,
+      paperDeliverySeconds,
+      sellMarkdown,
+      failureFineRatio,
+      colourLoveMultiplier,
+      whiteLoveMultiplier,
+      standardTimeRatio,
+      greedometer,
+      forecastSpeed,
       stationSpeedMultipliers,
     });
-  }, [stationSpeedMultipliers, workstationSpeed, safetyStock]);
+  }, [
+    buyingCooldown,
+    colourLoveMultiplier,
+    failureFineRatio,
+    forecastSpeed,
+    greedometer,
+    paperDeliverySeconds,
+    safetyStock,
+    sellMarkdown,
+    standardTimeRatio,
+    stationSpeedMultipliers,
+    workstationSpeed,
+    whiteLoveMultiplier,
+  ]);
 
   useEffect(() => {
     gameState.setTeamId(teamId);
@@ -437,6 +565,8 @@ function App() {
         scheduleOrderIds,
         paperInventory,
         parameters: {
+          failureFineRatio,
+          paperDeliverySeconds,
           safetyStock,
           workstationSpeed,
         },
@@ -456,6 +586,71 @@ function App() {
     schedulerTimeBucket,
     transactions,
     workstationSpeed,
+    stationSpeedMultipliers,
+    failureFineRatio,
+  ]);
+
+  useEffect(() => {
+    if (!schedulerSuggestions) {
+      setPlanForecastSummaries({
+        currentPlan: null,
+        bestPlan: null,
+      });
+      return;
+    }
+
+    const stations = gameState.getStationManager().getAllStations();
+    const forecastingContext = {
+      orders,
+      scheduleOrderIds,
+      paperInventory,
+      parameters: {
+        failureFineRatio,
+        paperDeliverySeconds,
+        safetyStock,
+        workstationSpeed,
+        greedometer,
+        forecastSpeed,
+      },
+      stations,
+      currentTime: schedulerTimeBucket,
+      calculatePaperCurrentWorth: (paperColor: Order["paperColor"]) =>
+        gameState.calculatePaperCurrentWorth(paperColor),
+    };
+
+    setPlanForecastSummaries({
+      currentPlan: estimatePlanTotalProfit(
+        forecastingContext,
+        schedulerSuggestions.currentSchedule,
+        {
+          simulationRuns: 12,
+          randomSeed: 11,
+        },
+      ),
+      bestPlan: estimatePlanTotalProfit(
+        forecastingContext,
+        schedulerSuggestions.bestSuggestion,
+        {
+          simulationRuns: 12,
+          randomSeed: 97,
+        },
+      ),
+    });
+  }, [
+    colourLoveMultiplier,
+    failureFineRatio,
+    forecastSpeed,
+    greedometer,
+    orders,
+    paperInventory,
+    paperDeliverySeconds,
+    safetyStock,
+    scheduleOrderIds,
+    schedulerSuggestions,
+    schedulerTimeBucket,
+    stationSpeedMultipliers,
+    workstationSpeed,
+    whiteLoveMultiplier,
   ]);
 
   // Warning before leaving the page
@@ -545,6 +740,11 @@ function App() {
       clearedSuggestedPaperPlanId !== schedulerSuggestions.bestSuggestion.id,
   );
   const buyingCooldownRemainingSeconds = gameState.getBuyingCooldownRemaining();
+  const suggestedPlanNeedsPaperOrder = suggestedSchedulePaperRequirements.length > 0;
+  const suggestedPlanActionDisabled =
+    !schedulerSuggestions?.bestSuggestion ||
+    currentScheduleMatchesSuggestion ||
+    (suggestedPlanNeedsPaperOrder && buyingCooldownRemainingSeconds > 0);
 
   // Add new transaction
   const addTransaction = (
@@ -637,9 +837,47 @@ function App() {
     }
   };
 
+  const resetGameState = () => {
+    if (!window.confirm("ARE YOU REALLY REALLY SURE you want to reset the whole game?")) {
+      return;
+    }
+
+    if (!window.confirm("This clears orders, cash, inventory, transactions, schedule, and synced state for this team. Continue?")) {
+      return;
+    }
+
+    gameState.reset();
+    const resetParameters = gameState.getParameters();
+    setOrders([]);
+    setPaperInventory({ w: 0, g: 0, p: 0, y: 0, b: 0, s: 0 });
+    setTransactions([]);
+    setCash(0);
+    setScheduleOrderIds([]);
+    setSchedulerSuggestions(null);
+    setPlanForecastSummaries({
+      currentPlan: null,
+      bestPlan: null,
+    });
+    setSafetyStock(resetParameters.safetyStock);
+    setWorkstationSpeed(resetParameters.workstationSpeed);
+    setBuyingCooldown(resetParameters.buyingCooldown);
+    setPaperDeliverySeconds(resetParameters.paperDeliverySeconds);
+    setSellMarkdown(resetParameters.sellMarkdown);
+    setFailureFineRatio(resetParameters.failureFineRatio);
+    setColourLoveMultiplier(resetParameters.colourLoveMultiplier);
+    setWhiteLoveMultiplier(resetParameters.whiteLoveMultiplier);
+    setStandardTimeRatio(resetParameters.standardTimeRatio);
+    setGreedometer(resetParameters.greedometer);
+    setForecastSpeed(resetParameters.forecastSpeed);
+    setStationSpeedMultipliers({
+      ...resetParameters.stationSpeedMultipliers,
+    });
+    setClearedSuggestedPaperPlanId(null);
+  };
+
   // Complete a pending transaction
   function completePendingTransaction(id: string) {
-    const transIndex = transactions.findIndex(t => t.id === id);
+    const transIndex = transactions.findIndex(t => t.id === id && t.pending);
     if (transIndex === -1) return;
     
     const trans = transactions[transIndex];
@@ -1325,7 +1563,7 @@ function App() {
                     >
                       {buyingCooldownRemainingSeconds > 0
                         ? `Cooldown ${formatTime(buyingCooldownRemainingSeconds)}`
-                        : "Accept"}
+                        : "Order"}
                     </button>
                   </div>
                   <div className="mt-2 space-y-1">
@@ -1376,21 +1614,14 @@ function App() {
                           Clear
                         </button>
                         <button
-                          onClick={() =>
-                            registerPaperRequirements(
-                              schedulerSuggestions?.bestSuggestion?.requiredPapers,
-                              "Suggested schedule paper order",
-                            )
-                          }
-                          disabled={
-                            !suggestedSchedulePaperRequirements.length ||
-                            buyingCooldownRemainingSeconds > 0
-                          }
+                          onClick={acceptAndOrderSuggestedPlan}
+                          disabled={suggestedPlanActionDisabled}
                           className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white disabled:cursor-not-allowed disabled:bg-emerald-300"
                         >
-                          {buyingCooldownRemainingSeconds > 0
+                          {suggestedPlanNeedsPaperOrder &&
+                          buyingCooldownRemainingSeconds > 0
                             ? `Cooldown ${formatTime(buyingCooldownRemainingSeconds)}`
-                            : "Accept"}
+                            : "Accept and Order"}
                         </button>
                       </div>
                     </div>
@@ -1418,8 +1649,8 @@ function App() {
                 )}
 
                 <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
-                  Paper delivery is {PAPER_DELIVERY_MINUTES} minutes. Buying cooldown is{" "}
-                  {BUYING_COOLDOWN_SECONDS / 60} minutes. Suggested schedule timing now
+                  Paper delivery is {paperDeliverySeconds} seconds ({paperDeliverySeconds / 60} minutes). Buying cooldown is{" "}
+                  {buyingCooldown / 60} minutes. Suggested schedule timing now
                   includes procurement delay when extra paper must be bought.
                 </div>
               </div>
@@ -1467,6 +1698,12 @@ function App() {
                           schedulerSuggestions?.bestSuggestion ?? null,
                         )}
                       </div>
+                      <div>
+                        Total:{" "}
+                        {formatCurrency(
+                          planForecastSummaries.bestPlan?.expectedTotalProfit ?? 0,
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1496,6 +1733,12 @@ function App() {
                       Success:{" "}
                       {formatSuccessRate(
                         schedulerSuggestions?.currentSchedule ?? null,
+                      )}
+                    </span>
+                    <span>
+                      Total:{" "}
+                      {formatCurrency(
+                        planForecastSummaries.currentPlan?.expectedTotalProfit ?? 0,
                       )}
                     </span>
                   </div>
@@ -1549,16 +1792,16 @@ function App() {
             {/* Accept Button */}
             <div className="flex justify-center pb-2">
               <button
-                onClick={acceptSuggestions}
-                disabled={
-                  !schedulerSuggestions?.bestSuggestion ||
-                  currentScheduleMatchesSuggestion
-                }
+                onClick={acceptAndOrderSuggestedPlan}
+                disabled={suggestedPlanActionDisabled}
                 className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs font-medium"
               >
                 {currentScheduleMatchesSuggestion
                   ? "Current Schedule Already Best"
-                  : "✓ Accept Suggestions"}
+                  : suggestedPlanNeedsPaperOrder &&
+                      buyingCooldownRemainingSeconds > 0
+                    ? `Cooldown ${formatTime(buyingCooldownRemainingSeconds)}`
+                    : "Accept and Order"}
               </button>
             </div>
           </div>
@@ -1649,7 +1892,7 @@ function App() {
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
                 Cash Transactions Ledger
               </h3>
-              <div className="max-h-32 overflow-y-auto mb-2">
+              <div className="mb-2">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-200 sticky top-0">
                     <tr>
@@ -1665,7 +1908,10 @@ function App() {
                       .slice(-10)
                       .reverse()
                       .map((trans) => (
-                        <tr key={trans.id} className="border-b">
+                        <tr
+                          key={`${trans.id}-${trans.arrivalTime ?? trans.timestamp.toISOString()}-${trans.reason ?? ""}`}
+                          className="border-b"
+                        >
                           <td
                             className={`px-1 py-0.5 font-mono ${trans.amount >= 0 ? "text-green-600" : "text-red-600"}`}
                           >
@@ -1935,14 +2181,9 @@ function App() {
                     className="flex-1 px-1 py-0.5 border rounded text-xs"
                     id="paperReason"
                   />
-                  <input
-                    type="number"
-                    placeholder="Mins"
-                    defaultValue={PAPER_DELIVERY_MINUTES}
-                    className="w-16 px-1 py-0.5 border rounded text-xs"
-                    id="paperDeliveryMins"
-                    title="Delivery time in minutes"
-                  />
+                  <div className="flex items-center px-2 text-[11px] text-gray-500">
+                    Pending {paperDeliverySeconds}s
+                  </div>
                   <button
                     onClick={() => {
                       const qty = parseInt(
@@ -1979,15 +2220,11 @@ function App() {
                           ) as HTMLInputElement
                         ).value || `Bought ${qty} sheets of ${colorMatch.name}`;
                       
-                      // Get delivery time in minutes and convert to milliseconds
-                      const deliveryMins = parseFloat(
-                        (document.getElementById("paperDeliveryMins") as HTMLInputElement).value
-                      ) || PAPER_DELIVERY_MINUTES;
-                      const deliveryMs = deliveryMins * 60 * 1000;
+                      const deliveryMs = paperDeliverySeconds * 1000;
 
                       // Create pending transaction for paper purchases
                       addTransaction(cost, reason, "paper", colorMatch.code, qty, undefined, true, deliveryMs);
-                      gameState.startBuyingCooldown(BUYING_COOLDOWN_SECONDS);
+                      gameState.startBuyingCooldown(buyingCooldown);
 
                       // Clear form
                       (
@@ -2025,7 +2262,7 @@ function App() {
                         if (gameState.isBuyingOnCooldown()) {
                           gameState.clearBuyingCooldown();
                         } else {
-                          gameState.startBuyingCooldown(BUYING_COOLDOWN_SECONDS);
+                          gameState.startBuyingCooldown(buyingCooldown);
                         }
                       }}
                       className={`px-2 py-0.5 rounded text-xs font-medium ${
@@ -2110,6 +2347,211 @@ function App() {
                   `StationManager` itself is still local runtime state. Only these
                   mirrored station multipliers are shared/synced right now.
                 </div>
+              </div>
+            </div>
+
+            <div className="col-span-3 rounded bg-gray-50 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">
+                    All Game Parameters
+                  </h3>
+                  <div className="text-[11px] text-gray-600">
+                    These values are live controls for game day. They sync through
+                    shared parameters.
+                  </div>
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  Cooldown remaining: {formatTime(gameState.getBuyingCooldownRemaining())}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 text-xs">
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Workstation Speed</div>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={workstationSpeed}
+                    onChange={(e) =>
+                      setWorkstationSpeed(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Safety Stock</div>
+                  <input
+                    type="number"
+                    value={safetyStock}
+                    onChange={(e) =>
+                      setSafetyStock(parseInt(e.target.value, 10) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Buying Cooldown (s)</div>
+                  <input
+                    type="number"
+                    value={buyingCooldown}
+                    onChange={(e) =>
+                      setBuyingCooldown(parseInt(e.target.value, 10) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Paper Delivery (s)</div>
+                  <input
+                    type="number"
+                    value={paperDeliverySeconds}
+                    onChange={(e) =>
+                      setPaperDeliverySeconds(parseInt(e.target.value, 10) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Sell Markdown</div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={sellMarkdown}
+                    onChange={(e) =>
+                      setSellMarkdown(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Failure Fine Ratio</div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={failureFineRatio}
+                    onChange={(e) =>
+                      setFailureFineRatio(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Colour Love Multiplier</div>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={colourLoveMultiplier}
+                    onChange={(e) =>
+                      setColourLoveMultiplier(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">White Love Multiplier</div>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={whiteLoveMultiplier}
+                    onChange={(e) =>
+                      setWhiteLoveMultiplier(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Standard Time Ratio</div>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={standardTimeRatio}
+                    onChange={(e) =>
+                      setStandardTimeRatio(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Greedometer</div>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="-1"
+                    max="1"
+                    value={greedometer}
+                    onChange={(e) =>
+                      setGreedometer(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                <label className="rounded bg-white p-2">
+                  <div className="mb-1 font-medium text-gray-700">Forecast Speed</div>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={forecastSpeed}
+                    onChange={(e) =>
+                      setForecastSpeed(parseFloat(e.target.value) || 0)
+                    }
+                    className="w-full rounded border px-2 py-1"
+                  />
+                </label>
+                {STATION_CONTROL_CONFIG.map((stationControl) => (
+                  <label
+                    key={`param-${stationControl.stationId}`}
+                    className="rounded bg-white p-2"
+                  >
+                    <div className="mb-1 font-medium text-gray-700">
+                      {stationControl.label} Multiplier
+                    </div>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0"
+                      max="1.5"
+                      value={stationSpeedMultipliers[stationControl.key] ?? 1}
+                      onChange={(e) =>
+                        updateStationSpeedMultiplier(
+                          stationControl.key,
+                          parseFloat(e.target.value) || 0,
+                        )
+                      }
+                      className="w-full rounded border px-2 py-1"
+                    />
+                  </label>
+                ))}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded border border-gray-200 bg-white px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-gray-700">Cooldown Control</span>
+                  <button
+                    onClick={() => gameState.startBuyingCooldown(buyingCooldown)}
+                    className="rounded bg-yellow-600 px-2 py-1 font-medium text-white hover:bg-yellow-700"
+                  >
+                    Start Cooldown
+                  </button>
+                  <button
+                    onClick={() => gameState.clearBuyingCooldown()}
+                    className="rounded bg-gray-600 px-2 py-1 font-medium text-white hover:bg-gray-700"
+                  >
+                    Clear Cooldown
+                  </button>
+                </div>
+                <div className="text-gray-500">Reminder: add charts if possible.</div>
+              </div>
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  onClick={resetGameState}
+                  className="rounded bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800"
+                >
+                  Reset Game
+                </button>
               </div>
             </div>
           </div>

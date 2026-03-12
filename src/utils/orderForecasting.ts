@@ -1,9 +1,9 @@
 import type { GameParameters, Order, PaperInventory } from "./gameState";
-import { FAILURE_FINE_RATIO } from "./gameState";
 import {
   buildSchedulerSuggestions,
   getCommittedOrders,
   estimateOrderTimeDistribution,
+  type RankedScheduleCandidate,
   type SchedulerSuggestionResult,
 } from "./strategyPlanner";
 import type { Station } from "./station";
@@ -14,7 +14,12 @@ const MIN_ARRIVAL_INTERVAL_MS = 60 * 1000;
 
 type ForecastableParameters = Pick<
   GameParameters,
-  "safetyStock" | "workstationSpeed" | "greedometer" | "forecastSpeed"
+  | "failureFineRatio"
+  | "forecastSpeed"
+  | "greedometer"
+  | "paperDeliverySeconds"
+  | "safetyStock"
+  | "workstationSpeed"
 >;
 
 export interface ForecastDistribution {
@@ -79,6 +84,14 @@ export interface AcceptanceComparisonResult {
   deltaExpectedProfit: number;
   model: OrderForecastModel;
   simulationRuns: number;
+}
+
+export interface PlanForecastResult {
+  immediateExpectedProfit: number;
+  expectedContinuationProfit: number;
+  expectedTotalProfit: number;
+  simulationRuns: number;
+  horizonMs: number;
 }
 
 interface ScenarioPolicyContext {
@@ -330,6 +343,10 @@ function getCommittedQueue(
   }));
 }
 
+function cloneQueueOrders(queueOrders: Order[]): Order[] {
+  return queueOrders.map((order) => ({ ...order }));
+}
+
 function getScheduleSnapshot(
   queueOrders: Order[],
   context: ForecastingContext,
@@ -341,6 +358,8 @@ function getScheduleSnapshot(
     paperInventory: context.paperInventory,
     parameters: {
       safetyStock: context.parameters.safetyStock,
+      failureFineRatio: context.parameters.failureFineRatio,
+      paperDeliverySeconds: context.parameters.paperDeliverySeconds,
       workstationSpeed: getForecastSpeed(context.parameters),
     },
     stations: context.stations,
@@ -379,6 +398,7 @@ function settleOrderProfit(
   order: Order,
   completionTime: number,
   calculatePaperCurrentWorth: ForecastingContext["calculatePaperCurrentWorth"],
+  failureFineRatio: number,
 ): number {
   const dueTime = getDueTime(order);
   const baseProfit = calculateBaseProfit(order, calculatePaperCurrentWorth);
@@ -387,7 +407,7 @@ function settleOrderProfit(
     return baseProfit;
   }
 
-  return -(order.price * FAILURE_FINE_RATIO);
+  return -(order.price * failureFineRatio);
 }
 
 function simulateScenario(
@@ -396,10 +416,13 @@ function simulateScenario(
   options: ForecastingOptions,
   policy: ForecastAcceptancePolicy,
   forcedDecision?: { orderId: string; accept: boolean },
+  initialQueueOrders?: Order[],
 ): ForecastScenarioResult {
   const horizonMs = options.horizonMs ?? DEFAULT_FORECAST_HORIZON_MS;
   const horizonEndTime = context.currentTime + horizonMs;
-  const queueOrders = getCommittedQueue(context);
+  const queueOrders = initialQueueOrders
+    ? cloneQueueOrders(initialQueueOrders)
+    : getCommittedQueue(context);
   const acceptedOrders = [...queueOrders];
   const skippedOrders: Order[] = [];
   const completedOrders: Order[] = [];
@@ -438,6 +461,7 @@ function simulateScenario(
         nextOrder,
         now,
         context.calculatePaperCurrentWorth,
+        context.parameters.failureFineRatio,
       );
       expectedFutureProfit += realizedProfit;
 
@@ -510,6 +534,58 @@ export function simulateForecastProfit(
   });
 
   return simulateScenario(context, forecastOrders, options, policy);
+}
+
+export function estimatePlanTotalProfit(
+  context: ForecastingContext,
+  plan: RankedScheduleCandidate | null,
+  options: ForecastingOptions = {},
+  policy: ForecastAcceptancePolicy = defaultForecastAcceptancePolicy,
+): PlanForecastResult | null {
+  if (!plan) {
+    return null;
+  }
+
+  const horizonMs = options.horizonMs ?? DEFAULT_FORECAST_HORIZON_MS;
+  const simulationRuns = options.simulationRuns ?? DEFAULT_SIMULATION_RUNS;
+  const planEndTime = context.currentTime + plan.expectedBusyMs;
+  let expectedContinuationProfit = 0;
+
+  for (let run = 0; run < simulationRuns; run += 1) {
+    const runSeed = (options.randomSeed ?? 1) + run;
+    const continuationContext: ForecastingContext = {
+      ...context,
+      currentTime: planEndTime,
+    };
+    const model = buildOrderForecastModel(continuationContext);
+    const generatedOrders = generateForecastOrders(model, continuationContext, {
+      ...options,
+      randomSeed: runSeed,
+      horizonMs,
+    });
+    const continuationResult = simulateScenario(
+      continuationContext,
+      generatedOrders,
+      {
+        ...options,
+        horizonMs,
+      },
+      policy,
+      undefined,
+      [],
+    );
+    expectedContinuationProfit += continuationResult.expectedFutureProfit;
+  }
+
+  expectedContinuationProfit /= simulationRuns;
+
+  return {
+    immediateExpectedProfit: plan.expectedProfit,
+    expectedContinuationProfit,
+    expectedTotalProfit: plan.expectedProfit + expectedContinuationProfit,
+    simulationRuns,
+    horizonMs,
+  };
 }
 
 export function compareOrderAcceptanceValue(

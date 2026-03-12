@@ -13,8 +13,9 @@
 // Normal time = Observed time * Standard time ratio
 export const STANDARD_TIME_RATIO = 1.23;
 export const BUYING_COOLDOWN_SECONDS = 5 * 60;
-export const PAPER_DELIVERY_MINUTES = 10;
-export const PAPER_DELIVERY_MS = PAPER_DELIVERY_MINUTES * 60 * 1000;
+export const PAPER_DELIVERY_SECONDS = 10 * 60;
+export const PAPER_DELIVERY_MINUTES = PAPER_DELIVERY_SECONDS / 60;
+export const PAPER_DELIVERY_MS = PAPER_DELIVERY_SECONDS * 1000;
 
 // Other game constants can be added here as needed
 // Examples might include:
