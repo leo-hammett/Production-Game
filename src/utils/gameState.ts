@@ -80,6 +80,7 @@ export interface Order {
   status: OrderStatus;
   startTime?: number;
   dueTime?: number;
+  selectedVerse?: string; // The actual verse text selected for this order (TODO)
 }
 
 // Game parameters that affect gameplay
@@ -104,6 +105,7 @@ export interface GameState {
   parameters: GameParameters;
   stationManager: StationManager;
   currentSchedule: Schedule; // Active production schedule
+  teamId: string; // Team identifier for the game session
   // Game data that can be modified
   occasions: string[];
   paperColors: PaperColor[];
@@ -156,6 +158,7 @@ class GameStateManager {
       },
       stationManager: new StationManager(),
       currentSchedule: new Schedule("current", []),
+      teamId: "TEAM-001", // Default team ID
       occasions: [
         "Christmas",
         "New Year",
@@ -239,6 +242,15 @@ class GameStateManager {
 
   getPaperColors(): PaperColor[] {
     return this.state.paperColors;
+  }
+
+  getTeamId(): string {
+    return this.state.teamId;
+  }
+
+  setTeamId(teamId: string) {
+    this.state.teamId = teamId;
+    this.notify();
   }
 
   getPaperColorMap(): Map<string, PaperColor> {
@@ -530,6 +542,7 @@ class GameStateManager {
       },
       stationManager: new StationManager(),
       currentSchedule: new Schedule("current", []),
+      teamId: "TEAM-001", // Default team ID
       occasions: [
         "Christmas",
         "New Year",

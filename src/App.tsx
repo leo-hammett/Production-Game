@@ -63,12 +63,12 @@ function App() {
 
   const [occasionSearch, setOccasionSearch] = useState("");
   const [filteredOccasions, setFilteredOccasions] = useState<string[]>([]);
-  const [activeOccasionIndex, setActiveOccasionIndex] = useState(-1);
+  const [activeRowIndex, setActiveRowIndex] = useState(-1);
+  const [activeField, setActiveField] = useState<'color' | 'occasion' | null>(null);
   const occasionInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
     {},
   );
   const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
-  const [activeColorIndex, setActiveColorIndex] = useState(-1);
   const [colorSearch, setColorSearch] = useState("");
   const [filteredColors, setFilteredColors] = useState<string[]>([]);
   const [showNewColorDialog, setShowNewColorDialog] = useState(false);
@@ -347,8 +347,13 @@ function App() {
 
   return (
     <div className="min-h-screen w-full bg-gray-100">
-      {/* Cash Metrics Header Bar */}
-      <div className="bg-gray-900 text-white p-2 border-b border-gray-700 sticky top-0 z-40">
+      {/* Cash Metrics Header Bar - Different colors for different views */}
+      <div className={`text-white p-2 border-b border-gray-700 sticky top-0 z-40 ${
+        currentView === "station1" ? "bg-blue-900" :
+        currentView === "station2" ? "bg-green-900" :
+        currentView === "station3" ? "bg-purple-900" :
+        "bg-gray-900"
+      }`}>
         <div className="flex justify-between items-center">
           <div className="flex gap-6">
             <div className="flex items-center gap-2">
@@ -548,13 +553,14 @@ function App() {
                       </td>
                       <td className="px-2 py-1 relative">
                         <input
-                          ref={(el) => (colorInputRefs.current[order.id] = el)}
+                          ref={(el) => {colorInputRefs.current[order.id] = el}}
                           type="text"
-                          value={activeColorIndex === index && colorSearch !== "" ? colorSearch : order.paperColor.name}
+                          value={activeRowIndex === index && activeField === 'color' && colorSearch !== "" ? colorSearch : order.paperColor.name}
                           onChange={(e) => {
                             const value = e.target.value;
                             setColorSearch(value);
-                            setActiveColorIndex(index);
+                            setActiveRowIndex(index);
+                            setActiveField('color');
                             setFilteredColors(
                               fuzzySearch(
                                 value,
@@ -573,13 +579,15 @@ function App() {
                                 exactMatch,
                               );
                               setColorSearch("");
-                              setActiveColorIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredColors([]);
                             }
                           }}
                           onFocus={(e) => {
                             setColorSearch("");
-                            setActiveColorIndex(index);
+                            setActiveRowIndex(index);
+                            setActiveField('color');
                             setFilteredColors(
                               fuzzySearch(
                                 "",
@@ -601,7 +609,8 @@ function App() {
                               }
                             }
                             setTimeout(() => {
-                              setActiveColorIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredColors([]);
                               setColorSearch("");
                             }, 200);
@@ -613,7 +622,8 @@ function App() {
                               if (topMatch) {
                                 updateOrderField(order.id, "paperColor", topMatch);
                                 setColorSearch("");
-                                setActiveColorIndex(-1);
+                                setActiveRowIndex(-1);
+                              setActiveField(null);
                                 setFilteredColors([]);
                               }
                             } else if (e.key === 'Enter') {
@@ -623,7 +633,8 @@ function App() {
                                 if (topMatch) {
                                   updateOrderField(order.id, "paperColor", topMatch);
                                   setColorSearch("");
-                                  setActiveColorIndex(-1);
+                                  setActiveRowIndex(-1);
+                              setActiveField(null);
                                   setFilteredColors([]);
                                 }
                               } else if (colorSearch && filteredColors.length === 0) {
@@ -640,14 +651,15 @@ function App() {
                               }
                             } else if (e.key === 'Escape') {
                               setColorSearch("");
-                              setActiveColorIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredColors([]);
                             }
                           }}
                           className={`w-full px-1 py-1.5 border rounded text-xs h-8 ${getColorClass(order.paperColor)}`}
                           placeholder="Color..."
                         />
-                        {activeColorIndex === index &&
+                        {activeRowIndex === index && activeField === 'color' &&
                           filteredColors.length > 0 && (
                             <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg">
                               {filteredColors.map((colorName) => {
@@ -667,7 +679,8 @@ function App() {
                                         );
                                       }
                                       setFilteredColors([]);
-                                      setActiveColorIndex(-1);
+                                      setActiveRowIndex(-1);
+                              setActiveField(null);
                                     }}
                                     className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.cssClass} flex justify-between items-center`}
                                   >
@@ -708,8 +721,8 @@ function App() {
                       </td>
                       <td className="px-2 py-1 relative">
                         <input
-                          ref={(el) =>
-                            (occasionInputRefs.current[order.id] = el)
+                          ref={(el) => {
+                            occasionInputRefs.current[order.id] = el}
                           }
                           type="text"
                           value={order.occasion}
@@ -718,18 +731,21 @@ function App() {
                             updateOrderField(order.id, "occasion", value);
                             setOccasionSearch(value);
                             setFilteredOccasions(fuzzySearch(value, OCCASIONS));
-                            setActiveOccasionIndex(index);
+                            setActiveRowIndex(index);
+                            setActiveField('occasion');
                           }}
                           onFocus={(e) => {
                             setOccasionSearch(e.target.value);
                             setFilteredOccasions(
                               e.target.value ? fuzzySearch(e.target.value, OCCASIONS) : OCCASIONS
                             );
-                            setActiveOccasionIndex(index);
+                            setActiveRowIndex(index);
+                            setActiveField('occasion');
                           }}
                           onBlur={() => {
                             setTimeout(() => {
-                              setActiveOccasionIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredOccasions([]);
                               setOccasionSearch("");
                             }, 200);
@@ -738,23 +754,26 @@ function App() {
                             if (e.key === 'Tab' && filteredOccasions.length > 0) {
                               // Auto-populate with top match on Tab
                               updateOrderField(order.id, "occasion", filteredOccasions[0]);
-                              setActiveOccasionIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredOccasions([]);
                             } else if (e.key === 'Enter' && filteredOccasions.length > 0) {
                               // Select the first match on Enter
                               e.preventDefault();
                               updateOrderField(order.id, "occasion", filteredOccasions[0]);
-                              setActiveOccasionIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredOccasions([]);
                             } else if (e.key === 'Escape') {
-                              setActiveOccasionIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredOccasions([]);
                             }
                           }}
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="Occasion..."
                         />
-                        {activeOccasionIndex === index &&
+                        {activeRowIndex === index && activeField === 'occasion' &&
                           filteredOccasions.length > 0 && (
                             <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg max-h-32 overflow-y-auto">
                               {filteredOccasions.map((occasion) => (
@@ -764,7 +783,8 @@ function App() {
                                     e.preventDefault();
                                     updateOrderField(order.id, "occasion", occasion);
                                     setFilteredOccasions([]);
-                                    setActiveOccasionIndex(-1);
+                                    setActiveRowIndex(-1);
+                              setActiveField(null);
                                   }}
                                   className="block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs"
                                 >

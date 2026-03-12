@@ -2,6 +2,9 @@ import type { Order } from "./gameState";
 import { gameState, FAILURE_FINE_RATIO } from "./gameState";
 import type { NormalDistribution } from "./station";
 
+// Re-export NormalDistribution for other modules
+export type { NormalDistribution } from "./station";
+
 // ============ DISTRIBUTION UTILITIES ============
 
 /**

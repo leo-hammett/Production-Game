@@ -17,6 +17,10 @@ export function StationView({
   updateOrderField,
   currentTime 
 }: StationViewProps) {
+  // Current order being worked on by this station
+  const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
+  const currentOrder = orders.find(o => o.id === currentOrderId);
+  
   // Resizable panes state
   const [leftPaneWidth, setLeftPaneWidth] = useState(70); // percentage
   const [isDragging, setIsDragging] = useState(false);
@@ -58,11 +62,19 @@ export function StationView({
       >
         <div className="p-4">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold text-gray-800">
+            <h2 className={`text-xl font-bold ${
+              stationNumber === 1 ? "text-blue-800" :
+              stationNumber === 2 ? "text-green-800" :
+              "text-purple-800"
+            }`}>
               Station {stationNumber}
             </h2>
             <div className="flex gap-2">
-              <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-sm font-medium">
+              <span className={`px-2 py-1 rounded text-sm font-medium ${
+                stationNumber === 1 ? "bg-blue-100 text-blue-700" :
+                stationNumber === 2 ? "bg-green-100 text-green-700" :
+                "bg-purple-100 text-purple-700"
+              }`}>
                 Online
               </span>
               <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-sm">
@@ -73,23 +85,54 @@ export function StationView({
 
           {/* Station Status Section */}
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">Station Status</h3>
-            <div className="bg-gray-50 rounded p-3 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Current Job:</span>
-                <span className="font-medium">Order #4567</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Progress:</span>
-                <span className="font-medium">45%</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Time Remaining:</span>
-                <span className="font-medium">2:34</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                <div className="bg-blue-600 h-2 rounded-full" style={{ width: '45%' }}></div>
-              </div>
+            <h3 className="text-lg font-bold text-gray-700 mb-3">Current Job</h3>
+            <div className="bg-gray-50 rounded p-4 space-y-3">
+              {currentOrder ? (
+                <>
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-600 font-medium">Order ID:</span>
+                    <span className="font-bold text-lg">#{currentOrder.id.slice(-6)}</span>
+                  </div>
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-600 font-medium">Quantity:</span>
+                    <span className="font-bold text-lg">{currentOrder.quantity} cards</span>
+                  </div>
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-600 font-medium">Sheet Size:</span>
+                    <span className="font-bold text-lg">{currentOrder.size}</span>
+                  </div>
+                  <div className="flex justify-between text-base items-center">
+                    <span className="text-gray-600 font-medium">Paper Color:</span>
+                    <span className={`font-bold px-3 py-1 rounded text-base ${
+                      currentOrder.paperColor.cssClass
+                    }`}>
+                      {currentOrder.paperColor.name}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-600 font-medium">Occasion:</span>
+                    <span className="font-bold text-lg">{currentOrder.occasion}</span>
+                  </div>
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-600 font-medium">Verse:</span>
+                    <span className="font-bold text-base">
+                      {currentOrder.selectedVerse || `Size ${currentOrder.verseSize} (TODO)`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-base">
+                    <span className="text-gray-600 font-medium">Team ID:</span>
+                    <span className="font-bold text-lg">{(window as any).gameState?.getTeamId?.() || "TEAM-001"}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                    <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: '45%' }}></div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-lg text-gray-500 font-medium">No job selected</p>
+                  <p className="text-base text-gray-400 mt-2">Click an order in the schedule to select it</p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -236,6 +279,9 @@ export function StationView({
               setOrders={setOrders}
               updateOrderField={updateOrderField}
               currentTime={currentTime}
+              isStationMode={true}
+              onOrderClick={setCurrentOrderId}
+              currentOrderId={currentOrderId}
             />
           </div>
         </div>

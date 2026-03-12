@@ -6,6 +6,9 @@ interface ProductionScheduleProps {
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
   updateOrderField: (id: string, field: keyof Order, value: any) => void;
   currentTime?: number;
+  isStationMode?: boolean;
+  onOrderClick?: (orderId: string) => void;
+  currentOrderId?: string | null;
 }
 
 interface OrderTimers {
@@ -16,7 +19,15 @@ interface OrderTimers {
   isOverdue: boolean;
 }
 
-export function ProductionSchedule({ orders, setOrders, updateOrderField, currentTime = Date.now() }: ProductionScheduleProps) {
+export function ProductionSchedule({ 
+  orders, 
+  setOrders, 
+  updateOrderField, 
+  currentTime = Date.now(),
+  isStationMode = false,
+  onOrderClick,
+  currentOrderId
+}: ProductionScheduleProps) {
   const [now, setNow] = useState(currentTime);
   
   // Update timer every second
@@ -127,10 +138,15 @@ export function ProductionSchedule({ orders, setOrders, updateOrderField, curren
             const timers = calculateTimers(order);
             const statusColor = getStatusColor(order, timers);
             
+            const isCurrentOrder = currentOrderId === order.id;
+            
             return (
               <div
                 key={order.id}
-                className={`p-2 rounded border ${statusColor} transition-all duration-300`}
+                className={`p-2 rounded border ${statusColor} transition-all duration-300 ${
+                  isStationMode ? 'cursor-pointer hover:shadow-lg' : ''
+                } ${isCurrentOrder ? 'ring-2 ring-blue-500 shadow-lg' : ''}`}
+                onClick={() => isStationMode && onOrderClick && onOrderClick(order.id)}
               >
                 <div className="flex justify-between items-start mb-1">
                   <div>

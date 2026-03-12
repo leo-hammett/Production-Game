@@ -78,10 +78,10 @@ export function OperationsManagementView({
   const [previousOrders, setPreviousOrders] = useState<Order[]>([]);
   const [occasionSearch, setOccasionSearch] = useState("");
   const [filteredOccasions, setFilteredOccasions] = useState<string[]>([]);
-  const [activeOccasionIndex, setActiveOccasionIndex] = useState(-1);
+  const [activeRowIndex, setActiveRowIndex] = useState(-1);
+  const [activeField, setActiveField] = useState<'color' | 'occasion' | null>(null);
   const occasionInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
-  const [activeColorIndex, setActiveColorIndex] = useState(-1);
   const [colorSearch, setColorSearch] = useState("");
   const [filteredColors, setFilteredColors] = useState<string[]>([]);
   const [showNewColorDialog, setShowNewColorDialog] = useState(false);
@@ -390,7 +390,7 @@ export function OperationsManagementView({
                       </td>
                       <td className="px-2 py-1 relative">
                         <input
-                          ref={(el) => (colorInputRefs.current[order.id] = el)}
+                          ref={(el) => {colorInputRefs.current[order.id] = el}}
                           type="text"
                           value={order.paperColor.name}
                           onChange={(e) => {
@@ -423,7 +423,8 @@ export function OperationsManagementView({
                                 PAPER_COLORS.map((c) => c.name),
                               ),
                             );
-                            setActiveColorIndex(index);
+                            setActiveRowIndex(index);
+                            setActiveField('color');
                           }}
                           onBlur={() => {
                             // Check if user typed something that doesn't exist
@@ -439,7 +440,8 @@ export function OperationsManagementView({
                               }
                             }
                             setTimeout(() => {
-                              setActiveColorIndex(-1);
+                              setActiveRowIndex(-1);
+                              setActiveField(null);
                               setFilteredColors([]);
                               setColorSearch("");
                             }, 200);
@@ -467,7 +469,7 @@ export function OperationsManagementView({
                           className={`w-full px-1 py-1.5 border rounded text-xs h-8 ${getColorClass(order.paperColor)}`}
                           placeholder="Color..."
                         />
-                        {activeColorIndex === index &&
+                        {activeRowIndex === index && activeField === 'color' &&
                           filteredColors.length > 0 && (
                             <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg">
                               {filteredColors.map((colorName) => {
@@ -487,7 +489,7 @@ export function OperationsManagementView({
                                         );
                                       }
                                       setFilteredColors([]);
-                                      setActiveColorIndex(-1);
+                                      setActiveRowIndex(-1);
                                     }}
                                     className={`block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs ${color?.cssClass} flex justify-between items-center`}
                                   >
@@ -528,9 +530,9 @@ export function OperationsManagementView({
                       </td>
                       <td className="px-2 py-1 relative">
                         <input
-                          ref={(el) =>
-                            (occasionInputRefs.current[order.id] = el)
-                          }
+                          ref={(el) => {
+                            occasionInputRefs.current[order.id] = el
+                          }}
                           type="text"
                           value={order.occasion}
                           onChange={(e) => {
@@ -538,27 +540,27 @@ export function OperationsManagementView({
                             updateOrderField(order.id, "occasion", value);
                             setOccasionSearch(value);
                             setFilteredOccasions(fuzzySearch(value, OCCASIONS));
-                            setActiveOccasionIndex(
-                              order.id === activeOccasionIndex ? -1 : -1,
-                            );
+                            setActiveRowIndex(index);
+                            setActiveField('occasion');
                           }}
                           onFocus={(e) => {
                             setOccasionSearch(e.target.value);
                             setFilteredOccasions(
                               fuzzySearch(e.target.value, OCCASIONS),
                             );
-                            setActiveOccasionIndex(index);
+                            setActiveRowIndex(index);
+                            setActiveField('color');
                           }}
                           onBlur={() => {
                             setTimeout(() => {
-                              setActiveOccasionIndex(-1);
+                              setActiveRowIndex(-1);
                               setFilteredOccasions([]);
                             }, 200);
                           }}
                           className="w-full px-1 py-1.5 border rounded text-xs h-8"
                           placeholder="Occasion..."
                         />
-                        {activeOccasionIndex === index &&
+                        {activeRowIndex === index && activeField === 'occasion' &&
                           filteredOccasions.length > 0 && (
                             <div className="absolute z-50 top-full left-0 w-full bg-white border rounded shadow-lg max-h-32 overflow-y-auto">
                               {filteredOccasions.map((occasion) => (
@@ -568,7 +570,7 @@ export function OperationsManagementView({
                                     e.preventDefault();
                                     updateOrderField(order.id, "occasion", occasion);
                                     setFilteredOccasions([]);
-                                    setActiveOccasionIndex(-1);
+                                    setActiveRowIndex(-1);
                                   }}
                                   className="block w-full text-left px-2 py-1 hover:bg-blue-50 text-xs"
                                 >
