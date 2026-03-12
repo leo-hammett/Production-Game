@@ -1,15 +1,84 @@
-import type { Order } from "./gameState";
-import { gameState, FAILURE_FINE_RATIO } from "./gameState";
-import type { NormalDistribution } from "./station";
+import type { GameParameters, Order, PaperInventory } from "./gameState";
+import { FAILURE_FINE_RATIO } from "./gameState";
+import { normalizeScheduleOrderIds } from "./orders";
+import {
+  calculateStationItemTimeDistribution,
+  type NormalDistribution,
+  type Station,
+} from "./station";
 
-// Re-export NormalDistribution for other modules
 export type { NormalDistribution } from "./station";
 
-// ============ DISTRIBUTION UTILITIES ============
+const COMMITTED_STATUSES = new Set<Order["status"]>([
+  "ordered",
+  "pending_inventory",
+  "WIP",
+  "sent",
+]);
+const MAX_CANDIDATE_EVALUATIONS = 25_000;
+const DEFAULT_TOP_SUGGESTION_COUNT = 5;
 
-/**
- * Add two normal distributions
- */
+export interface RequiredPapers {
+  [colorCode: string]: {
+    orderRequirement: number;
+    safetyStockGap: number;
+    totalNeeded: number;
+    currentInventory: number;
+    pendingDelivery: number;
+  };
+}
+
+export class Schedule {
+  id: string;
+  orderIds: string[];
+
+  constructor(id: string, orderIds: string[] = []) {
+    this.id = id;
+    this.orderIds = orderIds;
+  }
+}
+
+export interface ScheduleOrderEvaluation {
+  orderId: string;
+  successProbability: number;
+  expectedValue: number;
+  baseProfit: number;
+  failureFine: number;
+  cumulativeBusyMs: number;
+}
+
+export interface RankedScheduleCandidate {
+  id: string;
+  rank: number;
+  orderIds: string[];
+  expectedProfit: number;
+  expectedBusyMs: number;
+  profitPerSecond: number;
+  requiredPapers: RequiredPapers;
+  orderEvaluations: ScheduleOrderEvaluation[];
+}
+
+export interface SchedulerContext {
+  orders: Order[];
+  scheduleOrderIds: string[];
+  paperInventory: PaperInventory;
+  parameters: Pick<GameParameters, "safetyStock" | "workstationSpeed">;
+  stations: Station[];
+  currentTime: number;
+  calculatePaperCurrentWorth: (paperColor: Order["paperColor"]) => number;
+  maxCandidateEvaluations?: number;
+  topSuggestionCount?: number;
+}
+
+export interface SchedulerSuggestionResult {
+  currentSchedule: RankedScheduleCandidate | null;
+  bestSuggestion: RankedScheduleCandidate | null;
+  suggestions: RankedScheduleCandidate[];
+  evaluatedCandidateCount: number;
+  truncated: boolean;
+  warning: string | null;
+}
+
 export function addDistributions(
   a: NormalDistribution,
   b: NormalDistribution,
@@ -20,29 +89,31 @@ export function addDistributions(
   };
 }
 
-/**
- * Sum multiple normal distributions
- */
 export function sumDistributions(
   distributions: NormalDistribution[],
 ): NormalDistribution {
-  return distributions.reduce((sum, dist) => addDistributions(sum, dist), {
-    mean: 0,
-    stdDev: 0,
-  });
+  return distributions.reduce(
+    (sum, distribution) => addDistributions(sum, distribution),
+    {
+      mean: 0,
+      stdDev: 0,
+    },
+  );
 }
 
-/**
- * Calculate probability that value from distribution is less than threshold
- * Using normal CDF approximation
- * is there really no library to do these three functions more effectively?
- */
 export function probabilityLessThan(
   distribution: NormalDistribution,
   threshold: number,
 ): number {
+  if (threshold === Infinity) {
+    return 1;
+  }
+
+  if (distribution.stdDev <= Number.EPSILON) {
+    return distribution.mean <= threshold ? 1 : 0;
+  }
+
   const z = (threshold - distribution.mean) / distribution.stdDev;
-  // Approximation of normal CDF
   const t = 1 / (1 + 0.2316419 * Math.abs(z));
   const d = 0.3989423 * Math.exp((-z * z) / 2);
   const probability =
@@ -53,321 +124,337 @@ export function probabilityLessThan(
   return z > 0 ? 1 - probability : probability;
 }
 
-// ============ SCHEDULE OBJECTS ============
-
-/**
- * Represents required paper quantities for a schedule
- */
-export interface RequiredPapers {
-  [colorCode: string]: {
-    orderRequirement: number; // Amount needed for orders
-    safetyStockGap: number; // Amount to top up safety stock
-    totalNeeded: number; // Total to purchase
-    currentInventory: number; // What we have now
-    pendingDelivery: number; // What is on its way..
-  };
+export function getCommittedOrders(orders: Order[]): Order[] {
+  return orders.filter((order) => COMMITTED_STATUSES.has(order.status));
 }
 
-/**
- * Production schedule with orders and calculations
- */
-export class Schedule {
-  id: string;
-  orderIds: string[]; // Order IDs in execution sequence (references to actual orders)
-  scheduleTimeDistribution: NormalDistribution; // Time distribution for completion
-  timeMarginDistribution: NormalDistribution; // Buffer time distribution - time we will be unable to do work
-  profitDistribution: NormalDistribution; // Profit distribution accounting for risk
-  requiredPapers: RequiredPapers; // Paper inventory needed
-  expectedProfit: number; // Mean of profit distribution (calculated at end)
-  expectedCompletionTime: number; // Mean of time distribution (calculated at end)
-  profitPerHour: number; // Expected profit / expected time
-
-  constructor(id: string, orderIds: string[] = []) {
-    this.id = id;
-    this.orderIds = orderIds;
-    this.scheduleTimeDistribution = { mean: 0, stdDev: 0 };
-    this.timeMarginDistribution = { mean: 0, stdDev: 0 };
-    this.profitDistribution = { mean: 0, stdDev: 0 };
-    this.requiredPapers = {};
-    this.expectedProfit = 0;
-    this.expectedCompletionTime = 0;
-    this.profitPerHour = 0;
-  }
-
-  /**
-   * Get the actual Order objects from gameState based on orderIds
-   */
-  getOrders(): Order[] {
-    const allOrders = gameState.getOrders();
-    return this.orderIds
-      .map((id) => allOrders.find((order) => order.id === id))
-      .filter((order) => order !== undefined) as Order[];
-  }
-
-  /**
-   * Get time distributions for each order in schedule
-   */
-  getOrderDistributions(): NormalDistribution[] {
-    // TODO: Get from station calculations
-    //TODO: MAKE THE GETTING FROM STATION CALCULATIONS
-    // For now, placeholder distributions (in milliseconds)
-    const orders = this.getOrders();
-    return orders.map((order) => ({
-      mean: order.quantity * 2 * 60 * 1000, // 2 min per item converted to ms
-      stdDev: order.quantity * 0.5 * 60 * 1000, // converted to ms
-    }));
-  }
-
-  /**
-   * Calculate paper requirements for this schedule
-   */
-  getRequiredInventory(): RequiredPapers {
-    const required: RequiredPapers = {};
-    const inventory = gameState.getPaperInventory();
-    const safetyStock = gameState.getParameters().safetyStock;
-    const pendingOrders = gameState.getPendingOrders();
-
-    // Calculate requirements by color
-    const orders = this.getOrders();
-    for (const order of orders) {
-      const colorCode = order.paperColor.code;
-
-      if (!required[colorCode]) {
-        const currentInventory = inventory[colorCode] || 0;
-        const pendingConsumption = pendingOrders
-          .filter((o) => o.paperColor.code === colorCode)
-          .reduce((sum, o) => sum + o.quantity, 0);
-
-        required[colorCode] = {
-          orderRequirement: 0,
-          safetyStockGap: 0,
-          totalNeeded: 0,
-          currentInventory,
-          pendingDelivery: 0, // TODO: Calculate from pending transactions
-        };
-      }
-
-      required[colorCode].orderRequirement += order.quantity;
-    }
-
-    // Calculate totals including safety stock
-    for (const colorCode in required) {
-      const req = required[colorCode];
-      const availableInventory = req.currentInventory - req.orderRequirement;
-      const afterOrderInventory = availableInventory - req.orderRequirement;
-
-      req.safetyStockGap = Math.max(0, safetyStock - afterOrderInventory);
-      req.totalNeeded = Math.max(
-        0,
-        req.orderRequirement - availableInventory + req.safetyStockGap,
-      );
-    }
-
-    this.requiredPapers = required;
-    return required;
-  }
-
-  /**
-   * Calculate completion time distribution for this schedule
-   */
-  getScheduleCompletionTime(): NormalDistribution {
-    // Get time distributions for all orders
-    const orderDistributions = this.getOrderDistributions();
-
-    // TODO: Add current WIP order distributions
-    // TODO: Account for bottleneck station properly
-
-    // Sum all distributions (simplified - should consider bottleneck)
-    const totalDistribution = sumDistributions(orderDistributions);
-
-    this.scheduleTimeDistribution = totalDistribution;
-    return totalDistribution;
-  }
-
-  /**
-   * Calculate profit distribution accounting for risk
-   */
-  getScheduleEstimatedProfit(): NormalDistribution {
-    // Sort orders by due date (minimize lateness)
-    const orders = this.getOrders();
-    const sortedOrders = [...orders].sort((a, b) => {
-      const aDue = a.orderTime + a.leadTime * 60 * 1000; // Convert minutes to ms
-      const bDue = b.orderTime + b.leadTime * 60 * 1000;
-      return aDue - bDue;
-    });
-
-    // Get time distributions
-    const orderDistributions = this.getOrderDistributions();
-
-    // Build cumulative time distributions
-    let cumulativeTimeDistribution: NormalDistribution = { mean: 0, stdDev: 0 };
-    let profitComponents: { profit: number; probability: number }[] = [];
-
-    for (let i = 0; i < sortedOrders.length; i++) {
-      const order = sortedOrders[i];
-
-      // Add this order's time to cumulative
-      cumulativeTimeDistribution = addDistributions(
-        cumulativeTimeDistribution,
-        orderDistributions[i],
-      );
-
-      // Calculate profit/loss for this order
-      const revenue = order.price;
-      const paperCost =
-        order.quantity * gameState.calculatePaperCurrentWorth(order.paperColor);
-      const baseProfit = revenue - paperCost;
-      const fine = revenue * FAILURE_FINE_RATIO;
-
-      // Calculate probability of success (completing before deadline)
-      // Deadline is the time remaining from now until the order is due
-      const now = Date.now();
-      const dueTime = order.orderTime + order.leadTime * 60 * 1000; // leadTime in minutes to ms
-      const timeRemaining = Math.max(0, dueTime - now); // Time remaining in ms
-
-      const successProbability = probabilityLessThan(
-        cumulativeTimeDistribution,
-        timeRemaining,
-      );
-
-      // Expected value for this order
-      const expectedValue =
-        baseProfit * successProbability - fine * (1 - successProbability);
-
-      profitComponents.push({
-        profit: expectedValue,
-        probability: 1, // All orders contribute to total
-      });
-    }
-
-    // Create profit distribution
-    // Mean is sum of expected values
-    const totalExpectedProfit = profitComponents.reduce(
-      (sum, c) => sum + c.profit,
-      0,
-    );
-
-    // Std dev accounts for uncertainty in completion times affecting profit
-    // Simplified - should use Monte Carlo for accurate distribution
-    const profitStdDev = Math.abs(totalExpectedProfit) * 0.2; // 20% uncertainty
-
-    const profitDistribution: NormalDistribution = {
-      mean: totalExpectedProfit,
-      stdDev: profitStdDev,
-    };
-
-    // Update orderIds to match the sorted order
-    this.orderIds = sortedOrders.map((order) => order.id);
-    this.profitDistribution = profitDistribution;
-
-    // Only calculate expected values at the end
-    this.expectedProfit = profitDistribution.mean;
-    this.expectedCompletionTime = this.scheduleTimeDistribution.mean;
-    this.profitPerHour =
-      this.expectedCompletionTime > 0
-        ? this.expectedProfit / (this.expectedCompletionTime / 60)
-        : 0;
-
-    return profitDistribution;
-  }
-
-  /**
-   * Optimize order sequence for production
-   */
-  sortOrderSequence(): void {
-    // Sort by: 1) Due date - earliest due date first, 2. time to complete the order TODO:
-    const orders = this.getOrders();
-    orders.sort((a: Order, b: Order) => {
-      // First by due date
-      const aDue = a.orderTime + a.leadTime * 3600000;
-      const bDue = b.orderTime + b.leadTime * 3600000;
-      if (aDue !== bDue) return aDue - bDue;
-
-      // Then batch by color
-      if (a.paperColor.code !== b.paperColor.code) {
-        return a.paperColor.code.localeCompare(b.paperColor.code);
-      }
-
-      // Then by size
-      return a.size.localeCompare(b.size);
-    });
-  }
-
-  /**
-   * Calculate and update all schedule metrics
-   */
-  calculateAll(): void {
-    this.sortOrderSequence();
-    this.getRequiredInventory();
-    this.getScheduleCompletionTime();
-    this.getScheduleEstimatedProfit();
-  }
+export function getOptionalOrders(orders: Order[]): Order[] {
+  return orders.filter(
+    (order) => order.status === "passive" && order.available,
+  );
 }
 
-/**
- * Collection of schedules for comparison
- */
-export class ScheduleList {
-  schedules: Schedule[];
-  currentBest: string | null; // ID of best schedule by expected profit
-
-  constructor() {
-    this.schedules = [];
-    this.currentBest = null;
-  }
-
-  /**
-   * Add a schedule and recalculate best
-   */
-  addSchedule(schedule: Schedule): void {
-    this.schedules.push(schedule);
-    this.updateBest();
-  }
-
-  /**
-   * Update which schedule is best based on expected profit
-   */
-  updateBest(): void {
-    if (this.schedules.length === 0) {
-      this.currentBest = null;
-      return;
-    }
-
-    let bestSchedule = this.schedules[0];
-    for (const schedule of this.schedules) {
-      if (schedule.expectedProfit > bestSchedule.expectedProfit) {
-        bestSchedule = schedule;
-      }
-    }
-    this.currentBest = bestSchedule.id;
-  }
-
-  /**
-   * Get the best schedule
-   */
-  getBest(): Schedule | null {
-    if (!this.currentBest) return null;
-    return this.schedules.find((s) => s.id === this.currentBest) || null;
-  }
-}
-
-// ============ UTILITY FUNCTIONS ============
-
-/**
- * Calculate cost of failure for an order
- */
 export function calculateCostOfFailure(order: Order): number {
   return order.price * FAILURE_FINE_RATIO;
 }
 
-// ============ EXAMPLE USAGE ============
-/*
-const schedule = new Schedule("schedule-1", passiveOrders);
-schedule.calculateAll(); // Runs all calculations
-console.log("Expected profit:", schedule.expectedProfit);
-console.log("Time distribution:", schedule.scheduleTimeDistribution);
+export function estimateOrderTimeDistribution(
+  order: Order,
+  stations: Station[],
+  workstationSpeed: number,
+): NormalDistribution {
+  const effectiveSpeed = workstationSpeed > 0 ? workstationSpeed : 1;
+  const stationDistributions = stations
+    .map((station) => {
+      const distribution = calculateStationItemTimeDistribution(station, order);
+      return {
+        mean: (distribution.mean * 1000) / effectiveSpeed,
+        stdDev: (distribution.stdDev * 1000) / effectiveSpeed,
+      };
+    })
+    .filter((distribution) => distribution.mean > 0);
 
-const scheduleList = new ScheduleList();
-scheduleList.addSchedule(schedule);
-const best = scheduleList.getBest();
-*/
+  if (!stationDistributions.length) {
+    return {
+      mean: order.quantity * 60_000,
+      stdDev: Math.max(5_000, order.quantity * 15_000),
+    };
+  }
+
+  const firstItemDistribution = sumDistributions(stationDistributions);
+  const bottleneckDistribution = stationDistributions.reduce((slowest, current) =>
+    current.mean > slowest.mean ? current : slowest,
+  );
+  const additionalItems = Math.max(0, order.quantity - 1);
+
+  if (!additionalItems) {
+    return firstItemDistribution;
+  }
+
+  return addDistributions(firstItemDistribution, {
+    mean: bottleneckDistribution.mean * additionalItems,
+    stdDev: bottleneckDistribution.stdDev * Math.sqrt(additionalItems),
+  });
+}
+
+function getDueTime(order: Order): number {
+  if (order.dueTime !== undefined) {
+    return order.dueTime;
+  }
+
+  if (order.leadTime < 0) {
+    return Infinity;
+  }
+
+  return order.orderTime + order.leadTime * 60 * 1000;
+}
+
+function buildRequiredPapers(
+  orderIds: string[],
+  orderMap: Map<string, Order>,
+  paperInventory: PaperInventory,
+  safetyStock: number,
+): RequiredPapers {
+  const requiredPapers: RequiredPapers = {};
+
+  orderIds.forEach((orderId) => {
+    const order = orderMap.get(orderId);
+    if (!order) {
+      return;
+    }
+
+    const colorCode = order.paperColor.code;
+    if (!requiredPapers[colorCode]) {
+      requiredPapers[colorCode] = {
+        orderRequirement: 0,
+        safetyStockGap: 0,
+        totalNeeded: 0,
+        currentInventory: paperInventory[colorCode] || 0,
+        pendingDelivery: 0,
+      };
+    }
+
+    requiredPapers[colorCode].orderRequirement += order.quantity;
+  });
+
+  Object.values(requiredPapers).forEach((paperRequirement) => {
+    const inventoryAfterOrders =
+      paperRequirement.currentInventory - paperRequirement.orderRequirement;
+    paperRequirement.safetyStockGap = Math.max(
+      0,
+      safetyStock - inventoryAfterOrders,
+    );
+    paperRequirement.totalNeeded = Math.max(
+      0,
+      paperRequirement.orderRequirement +
+        paperRequirement.safetyStockGap -
+        paperRequirement.currentInventory,
+    );
+  });
+
+  return requiredPapers;
+}
+
+export function evaluateScheduleCandidate(
+  orderIds: string[],
+  context: SchedulerContext,
+): RankedScheduleCandidate {
+  const orderMap = new Map(context.orders.map((order) => [order.id, order]));
+  let cumulativeDistribution: NormalDistribution = { mean: 0, stdDev: 0 };
+
+  const orderEvaluations = orderIds
+    .map((orderId) => orderMap.get(orderId))
+    .filter((order): order is Order => Boolean(order))
+    .map((order) => {
+      const timeDistribution = estimateOrderTimeDistribution(
+        order,
+        context.stations,
+        context.parameters.workstationSpeed,
+      );
+      cumulativeDistribution = addDistributions(
+        cumulativeDistribution,
+        timeDistribution,
+      );
+
+      const dueTime = getDueTime(order);
+      const timeRemaining =
+        dueTime === Infinity
+          ? Infinity
+          : Math.max(0, dueTime - context.currentTime);
+      const successProbability = probabilityLessThan(
+        cumulativeDistribution,
+        timeRemaining,
+      );
+      const baseProfit =
+        order.price -
+        order.quantity * context.calculatePaperCurrentWorth(order.paperColor);
+      const failureFine = calculateCostOfFailure(order);
+      const expectedValue =
+        baseProfit * successProbability -
+        failureFine * (1 - successProbability);
+
+      return {
+        orderId: order.id,
+        successProbability,
+        expectedValue,
+        baseProfit,
+        failureFine,
+        cumulativeBusyMs: cumulativeDistribution.mean,
+      };
+    });
+
+  const expectedProfit = orderEvaluations.reduce(
+    (sum, evaluation) => sum + evaluation.expectedValue,
+    0,
+  );
+  const expectedBusyMs = cumulativeDistribution.mean;
+
+  return {
+    id: orderIds.join("|") || "empty",
+    rank: 0,
+    orderIds,
+    expectedProfit,
+    expectedBusyMs,
+    profitPerSecond:
+      expectedBusyMs > 0 ? expectedProfit / (expectedBusyMs / 1000) : 0,
+    requiredPapers: buildRequiredPapers(
+      orderIds,
+      orderMap,
+      context.paperInventory,
+      context.parameters.safetyStock,
+    ),
+    orderEvaluations,
+  };
+}
+
+export function rankScheduleCandidates(
+  schedules: RankedScheduleCandidate[],
+): RankedScheduleCandidate[] {
+  return [...schedules]
+    .sort((left, right) => {
+      if (right.profitPerSecond !== left.profitPerSecond) {
+        return right.profitPerSecond - left.profitPerSecond;
+      }
+
+      if (right.expectedProfit !== left.expectedProfit) {
+        return right.expectedProfit - left.expectedProfit;
+      }
+
+      return left.expectedBusyMs - right.expectedBusyMs;
+    })
+    .map((schedule, index) => ({
+      ...schedule,
+      rank: index + 1,
+    }));
+}
+
+function buildPermutations(
+  source: string[],
+  maxCount: number,
+): { permutations: string[][]; truncated: boolean } {
+  const permutations: string[][] = [];
+  const items = [...source];
+  let truncated = false;
+
+  const permute = (startIndex: number) => {
+    if (permutations.length >= maxCount) {
+      truncated = true;
+      return;
+    }
+
+    if (startIndex >= items.length) {
+      permutations.push([...items]);
+      return;
+    }
+
+    for (let index = startIndex; index < items.length; index += 1) {
+      [items[startIndex], items[index]] = [items[index], items[startIndex]];
+      permute(startIndex + 1);
+      [items[startIndex], items[index]] = [items[index], items[startIndex]];
+
+      if (truncated) {
+        return;
+      }
+    }
+  };
+
+  permute(0);
+
+  return { permutations, truncated };
+}
+
+export function generateScheduleCandidates(
+  orders: Order[],
+  maxCandidateEvaluations: number = MAX_CANDIDATE_EVALUATIONS,
+): { orderIds: string[][]; truncated: boolean } {
+  const committedOrderIds = getCommittedOrders(orders).map((order) => order.id);
+  const optionalOrderIds = getOptionalOrders(orders).map((order) => order.id);
+  const candidates: string[][] = [];
+  let truncated = false;
+
+  for (
+    let subsetMask = 0;
+    subsetMask < 2 ** optionalOrderIds.length && !truncated;
+    subsetMask += 1
+  ) {
+    const selectedOptionalIds = optionalOrderIds.filter(
+      (_orderId, index) => (subsetMask & (1 << index)) !== 0,
+    );
+    const includedIds = [...committedOrderIds, ...selectedOptionalIds];
+
+    if (!includedIds.length) {
+      continue;
+    }
+
+    const remainingCapacity = maxCandidateEvaluations - candidates.length;
+    if (remainingCapacity <= 0) {
+      truncated = true;
+      break;
+    }
+
+    const { permutations, truncated: permutationTruncated } = buildPermutations(
+      includedIds,
+      remainingCapacity,
+    );
+    candidates.push(...permutations);
+    truncated = permutationTruncated;
+  }
+
+  return {
+    orderIds: candidates,
+    truncated,
+  };
+}
+
+function getCurrentPlannerOrderIds(context: SchedulerContext): string[] {
+  const plannerEligibleOrderIds = new Set(
+    [...getCommittedOrders(context.orders), ...getOptionalOrders(context.orders)].map(
+      (order) => order.id,
+    ),
+  );
+  const normalizedScheduleOrderIds = normalizeScheduleOrderIds(
+    context.orders,
+    context.scheduleOrderIds,
+  );
+  const currentOrderIds = normalizedScheduleOrderIds.filter((orderId) =>
+    plannerEligibleOrderIds.has(orderId),
+  );
+
+  if (currentOrderIds.length) {
+    return currentOrderIds;
+  }
+
+  return getCommittedOrders(context.orders).map((order) => order.id);
+}
+
+export function buildSchedulerSuggestions(
+  context: SchedulerContext,
+): SchedulerSuggestionResult {
+  const candidateOrderIds = generateScheduleCandidates(
+    context.orders,
+    context.maxCandidateEvaluations,
+  );
+  const rankedSuggestions = rankScheduleCandidates(
+    candidateOrderIds.orderIds.map((orderIds) =>
+      evaluateScheduleCandidate(orderIds, context),
+    ),
+  );
+  const topSuggestionCount =
+    context.topSuggestionCount ?? DEFAULT_TOP_SUGGESTION_COUNT;
+  const currentOrderIds = getCurrentPlannerOrderIds(context);
+
+  return {
+    currentSchedule: currentOrderIds.length
+      ? evaluateScheduleCandidate(currentOrderIds, context)
+      : null,
+    bestSuggestion: rankedSuggestions[0] || null,
+    suggestions: rankedSuggestions.slice(0, topSuggestionCount),
+    evaluatedCandidateCount: rankedSuggestions.length,
+    truncated: candidateOrderIds.truncated,
+    warning: candidateOrderIds.truncated
+      ? `Candidate search capped at ${
+          context.maxCandidateEvaluations ?? MAX_CANDIDATE_EVALUATIONS
+        } schedules.`
+      : null,
+  };
+}

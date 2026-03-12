@@ -15,6 +15,10 @@ import {
 const client = generateClient<Schema>();
 const SAVE_DEBOUNCE_MS = 500;
 
+function getSharedGameStateModel() {
+  return client.models?.SharedGameState;
+}
+
 export type SyncState =
   | "configuring"
   | "disabled"
@@ -125,12 +129,21 @@ export function useAmplifySharedGameState(
 
   const persistSnapshot = useEffectEvent(
     async (snapshot: SharedGameSnapshot, serialized: string) => {
+      const sharedGameStateModel = getSharedGameStateModel();
+      if (!sharedGameStateModel) {
+        setSyncStatus({
+          state: "disabled",
+          message: "Sync disabled: SharedGameState model unavailable",
+        });
+        return;
+      }
+
       setSyncStatus({
         state: "syncing",
         message: `Syncing ${snapshot.teamId}`,
       });
 
-      const existing = await client.models.SharedGameState.get({
+      const existing = await sharedGameStateModel.get({
         teamId: snapshot.teamId,
       });
 
@@ -146,8 +159,8 @@ export function useAmplifySharedGameState(
       };
 
       const result = existing.data
-        ? await client.models.SharedGameState.update(payload)
-        : await client.models.SharedGameState.create(payload);
+        ? await sharedGameStateModel.update(payload)
+        : await sharedGameStateModel.create(payload);
 
       if (result.errors?.length) {
         throw new Error(result.errors.map((error) => error.message).join("; "));
@@ -166,6 +179,15 @@ export function useAmplifySharedGameState(
       return;
     }
 
+    const sharedGameStateModel = getSharedGameStateModel();
+    if (!sharedGameStateModel) {
+      setSyncStatus({
+        state: "disabled",
+        message: "Sync disabled: SharedGameState model unavailable",
+      });
+      return;
+    }
+
     initializedRef.current = false;
     skipPersistRef.current = null;
     lastSavedRef.current = null;
@@ -177,7 +199,7 @@ export function useAmplifySharedGameState(
 
     let cancelled = false;
 
-    const subscription = client.models.SharedGameState.observeQuery({
+    const subscription = sharedGameStateModel.observeQuery({
       filter: {
         teamId: {
           eq: bindings.teamId,

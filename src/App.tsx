@@ -34,6 +34,11 @@ import {
   formatTime,
 } from "./utils/ui";
 import { DEFAULT_TEAM_ID, TEAM_ID_STORAGE_KEY } from "./utils/sharedGameState";
+import {
+  buildSchedulerSuggestions,
+  type RankedScheduleCandidate,
+  type SchedulerSuggestionResult,
+} from "./utils/strategyPlanner";
 
 type ViewType = "operations" | "station1" | "station2" | "station3";
 
@@ -68,6 +73,45 @@ function normalizePaperSize(value: string): string {
   return digits ? `A${digits}` : "";
 }
 
+function formatDurationCompact(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return "∞";
+  }
+
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+}
+
+function formatProfitPerSecond(value: number): string {
+  return `£${value.toFixed(Math.abs(value) >= 1 ? 2 : 3)}/s`;
+}
+
+function formatSuccessRate(schedule: RankedScheduleCandidate | null): string {
+  if (!schedule || !schedule.orderEvaluations.length) {
+    return "n/a";
+  }
+
+  const averageSuccessProbability =
+    schedule.orderEvaluations.reduce(
+      (sum, evaluation) => sum + evaluation.successProbability,
+      0,
+    ) / schedule.orderEvaluations.length;
+
+  return `${(averageSuccessProbability * 100).toFixed(0)}%`;
+}
+
 function App() {
   // View state
   const [currentView, setCurrentView] = useState<ViewType>("operations");
@@ -95,13 +139,20 @@ function App() {
     {},
   );
   const colorInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
+  const quantityInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>(
+    {},
+  );
   const [colorSearch, setColorSearch] = useState("");
   const [filteredColors, setFilteredColors] = useState<string[]>([]);
   const [showNewColorDialog, setShowNewColorDialog] = useState(false);
   const [newColorName, setNewColorName] = useState("");
   const [newColorPrice, setNewColorPrice] = useState(20);
   const [pendingColorOrderId, setPendingColorOrderId] = useState<string | null>(null);
+  const [pendingQuantityFocusOrderId, setPendingQuantityFocusOrderId] =
+    useState<string | null>(null);
   const [scheduleOrderIds, setScheduleOrderIds] = useState<string[]>([]);
+  const [schedulerSuggestions, setSchedulerSuggestions] =
+    useState<SchedulerSuggestionResult | null>(null);
 
   // Inventory Management State - the game starts with nothing, then we will manually buy
   const [paperInventory, setPaperInventory] = useState<PaperInventory>({
@@ -118,6 +169,7 @@ function App() {
   const [workstationSpeed, setWorkstationSpeed] = useState(1.0);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const schedulerTimeBucket = Math.floor(currentTime / 30000) * 30000;
   const syncStatus = useAmplifySharedGameState({
     teamId,
     orders,
@@ -150,10 +202,31 @@ function App() {
     setOrders(updatedOrders);
   };
 
+  const handleAddOrder = () => {
+    const newOrder = addOrder();
+    setOrders((currentOrders) => [...currentOrders, newOrder]);
+    setPendingQuantityFocusOrderId(newOrder.id);
+  };
+
   // Accept suggestions
   const acceptSuggestions = () => {
-    // Backend integration would go here
-    console.log('Suggestions accepted');
+    const bestSuggestion = schedulerSuggestions?.bestSuggestion;
+    if (!bestSuggestion) {
+      return;
+    }
+
+    const normalizedCurrentOrderIds = normalizeScheduleOrderIds(
+      orders,
+      scheduleOrderIds,
+    );
+    const bestSuggestionIds = new Set(bestSuggestion.orderIds);
+    const trailingOrderIds = normalizedCurrentOrderIds.filter(
+      (orderId) => !bestSuggestionIds.has(orderId),
+    );
+    const nextOrderIds = [...bestSuggestion.orderIds, ...trailingOrderIds];
+
+    setScheduleOrderIds(nextOrderIds);
+    gameState.updateScheduleOrderIds(nextOrderIds);
   };
 
   // Handle pane resizing
@@ -189,6 +262,21 @@ function App() {
   }, [orders]);
 
   useEffect(() => {
+    if (!pendingQuantityFocusOrderId) {
+      return;
+    }
+
+    const quantityInput = quantityInputRefs.current[pendingQuantityFocusOrderId];
+    if (!quantityInput) {
+      return;
+    }
+
+    quantityInput.focus();
+    quantityInput.select();
+    setPendingQuantityFocusOrderId(null);
+  }, [orders, pendingQuantityFocusOrderId]);
+
+  useEffect(() => {
     return gameState.subscribe(() => {
       const nextOrderIds = gameState.getCurrentSchedule().orderIds;
       setScheduleOrderIds((currentOrderIds) =>
@@ -219,7 +307,7 @@ function App() {
 
   useEffect(() => {
     gameState.setTransactions(transactions);
-  }, [transactions, completePendingTransaction]);
+  }, [transactions]);
 
   useEffect(() => {
     gameState.updateParameters({
@@ -237,6 +325,31 @@ function App() {
   useEffect(() => {
     (window as Window & { gameState?: typeof gameState }).gameState = gameState;
   }, []);
+
+  useEffect(() => {
+    setSchedulerSuggestions(
+      buildSchedulerSuggestions({
+        orders,
+        scheduleOrderIds,
+        paperInventory,
+        parameters: {
+          safetyStock,
+          workstationSpeed,
+        },
+        stations: gameState.getStationManager().getAllStations(),
+        currentTime: schedulerTimeBucket,
+        calculatePaperCurrentWorth: (paperColor) =>
+          gameState.calculatePaperCurrentWorth(paperColor),
+      }),
+    );
+  }, [
+    orders,
+    paperInventory,
+    safetyStock,
+    scheduleOrderIds,
+    schedulerTimeBucket,
+    workstationSpeed,
+  ]);
 
   // Warning before leaving the page
   useEffect(() => {
@@ -256,8 +369,7 @@ function App() {
       // Ctrl+N: Add new order
       if (e.ctrlKey && e.key === "n") {
         e.preventDefault();
-        const newOrder = addOrder();
-        setOrders([...orders, newOrder]);
+        handleAddOrder();
       }
       // Ctrl+Z: Delete newest passive order with confirmation
       if (e.ctrlKey && e.key === "z") {
@@ -270,7 +382,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [orders]);
+  }, [handleAddOrder, orders]);
 
   const applyTeamId = () => {
     const normalized = teamIdInput.trim().toUpperCase();
@@ -281,25 +393,29 @@ function App() {
     setTeamId(normalized);
   };
 
-  // Statistics calculations (skeleton for backend)
-  const stats = {
-    current: {
-      prodTime: "48h", // TODO: Calculate from backend
-      timeMargin: "12h", // TODO: Calculate from backend
-      profit: "£450", // TODO: Calculate from backend
-      riskOfFailure: "15%", // TODO: Calculate from backend
-      costOfFailure: "£150", // TODO: Calculate from backend
-      rewardRisk: "3.0", // TODO: Calculate from backend
-    },
-    suggested: {
-      prodTime: "45h", // TODO: Calculate from backend
-      timeMargin: "18h", // TODO: Calculate from backend
-      profit: "£520", // TODO: Calculate from backend
-      riskOfFailure: "12%", // TODO: Calculate from backend
-      costOfFailure: "£130", // TODO: Calculate from backend
-      rewardRisk: "4.0", // TODO: Calculate from backend
-    },
-  };
+  const orderMap = new Map(orders.map((order) => [order.id, order]));
+  const describeSchedule = (schedule: RankedScheduleCandidate | null) =>
+    schedule
+      ? schedule.orderIds
+          .map((orderId) => {
+            const order = orderMap.get(orderId);
+            if (!order) {
+              return orderId.slice(-6);
+            }
+
+            return `${order.quantity}x ${order.occasion || "Cards"} (${order.paperColor.code.toUpperCase()})`;
+          })
+          .join(" -> ")
+      : "No schedulable orders";
+
+  const currentScheduleMatchesSuggestion = Boolean(
+    schedulerSuggestions?.bestSuggestion &&
+      schedulerSuggestions.currentSchedule &&
+      areOrderIdListsEqual(
+        schedulerSuggestions.bestSuggestion.orderIds,
+        schedulerSuggestions.currentSchedule.orderIds,
+      ),
+  );
 
   // Add new transaction
   const addTransaction = (
@@ -634,6 +750,9 @@ function App() {
                       </td>
                       <td className="px-2 py-1">
                         <input
+                          ref={(el) => {
+                            quantityInputRefs.current[order.id] = el;
+                          }}
                           type="text"
                           value={order.quantity}
                           onChange={(e) =>
@@ -1020,10 +1139,7 @@ function App() {
             <div className="flex justify-between items-center mb-2 px-1">
               <div className="flex gap-2">
                 <button
-                  onClick={() => {
-                    const newOrder = addOrder();
-                    setOrders([...orders, newOrder]);
-                  }}
+                  onClick={handleAddOrder}
                   className="px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium"
                   title="Add Order (Ctrl+N)"
                 >
@@ -1067,86 +1183,124 @@ function App() {
               </div>
             </div>
 
-
-            {/* Statistics Comparison Table */}
+            {/* Scheduler Suggestions */}
             <div className="mb-1">
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
-                Performance Metrics
+                Scheduler Suggestions
               </h3>
-              <div>
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-1 py-0.5 text-left text-xs"></th>
-                      <th className="px-1 py-0.5 text-center text-xs">
-                        Prod Time
-                      </th>
-                      <th className="px-1 py-0.5 text-center text-xs">
-                        Margin
-                      </th>
-                      <th className="px-1 py-0.5 text-center text-xs">
-                        Profit
-                      </th>
-                      <th className="px-1 py-0.5 text-center text-xs">
-                        Risk %
-                      </th>
-                      <th className="px-1 py-0.5 text-center text-xs">
-                        Risk Cost
-                      </th>
-                      <th className="px-1 py-0.5 text-center text-xs">
-                        R/R Ratio
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b bg-green-50">
-                      <td className="px-1 py-0.5 font-medium text-green-700 text-xs">
-                        Suggested
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.suggested.prodTime}
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.suggested.timeMargin}
-                      </td>
-                      <td className="px-1 py-0.5 text-center font-medium text-xs">
-                        {stats.suggested.profit}
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.suggested.riskOfFailure}
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.suggested.costOfFailure}
-                      </td>
-                      <td className="px-1 py-0.5 text-center font-medium text-xs">
-                        {stats.suggested.rewardRisk}
-                      </td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="px-1 py-0.5 font-medium text-gray-700 text-xs">
-                        Current
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.current.prodTime}
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.current.timeMargin}
-                      </td>
-                      <td className="px-1 py-0.5 text-center font-medium text-xs">
-                        {stats.current.profit}
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.current.riskOfFailure}
-                      </td>
-                      <td className="px-1 py-0.5 text-center text-xs">
-                        {stats.current.costOfFailure}
-                      </td>
-                      <td className="px-1 py-0.5 text-center font-medium text-xs">
-                        {stats.current.rewardRisk}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+              <div className="space-y-2">
+                <div className="rounded border border-green-200 bg-green-50 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-green-800">
+                        Best Plan
+                      </div>
+                      <div className="text-[11px] text-green-700">
+                        {schedulerSuggestions?.bestSuggestion
+                          ? describeSchedule(schedulerSuggestions.bestSuggestion)
+                          : "No schedulable plan available yet."}
+                      </div>
+                    </div>
+                    <div className="text-right text-[11px] text-green-900">
+                      <div>
+                        Profit: £
+                        {schedulerSuggestions?.bestSuggestion?.expectedProfit.toFixed(2) ??
+                          "0.00"}
+                      </div>
+                      <div>
+                        Busy:{" "}
+                        {formatDurationCompact(
+                          schedulerSuggestions?.bestSuggestion?.expectedBusyMs ?? 0,
+                        )}
+                      </div>
+                      <div>
+                        Rate:{" "}
+                        {formatProfitPerSecond(
+                          schedulerSuggestions?.bestSuggestion?.profitPerSecond ?? 0,
+                        )}
+                      </div>
+                      <div>
+                        Success:{" "}
+                        {formatSuccessRate(
+                          schedulerSuggestions?.bestSuggestion ?? null,
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700">
+                  <div className="font-semibold text-gray-800">Current Plan</div>
+                  <div>{describeSchedule(schedulerSuggestions?.currentSchedule ?? null)}</div>
+                  <div className="mt-1 flex flex-wrap gap-3 text-gray-600">
+                    <span>
+                      Profit: £
+                      {schedulerSuggestions?.currentSchedule?.expectedProfit.toFixed(2) ??
+                        "0.00"}
+                    </span>
+                    <span>
+                      Busy:{" "}
+                      {formatDurationCompact(
+                        schedulerSuggestions?.currentSchedule?.expectedBusyMs ?? 0,
+                      )}
+                    </span>
+                    <span>
+                      Rate:{" "}
+                      {formatProfitPerSecond(
+                        schedulerSuggestions?.currentSchedule?.profitPerSecond ?? 0,
+                      )}
+                    </span>
+                    <span>
+                      Success:{" "}
+                      {formatSuccessRate(
+                        schedulerSuggestions?.currentSchedule ?? null,
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="rounded border border-gray-200 bg-white p-2">
+                  <div className="mb-1 flex items-center justify-between">
+                    <div className="text-xs font-semibold text-gray-800">
+                      Top Alternatives
+                    </div>
+                    <div className="text-[11px] text-gray-500">
+                      {schedulerSuggestions?.evaluatedCandidateCount ?? 0} plans
+                      checked
+                    </div>
+                  </div>
+                  {schedulerSuggestions?.suggestions.length ? (
+                    <div className="space-y-1">
+                      {schedulerSuggestions.suggestions.slice(0, 3).map((schedule) => (
+                        <div
+                          key={schedule.id}
+                          className="rounded border border-gray-200 bg-gray-50 p-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[11px] text-gray-800">
+                              <span className="font-semibold">#{schedule.rank}</span>{" "}
+                              {describeSchedule(schedule)}
+                            </div>
+                            <div className="text-right text-[11px] text-gray-600">
+                              <div>{formatProfitPerSecond(schedule.profitPerSecond)}</div>
+                              <div>£{schedule.expectedProfit.toFixed(2)}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-gray-500">
+                      No candidate schedules available.
+                    </div>
+                  )}
+                </div>
+
+                {schedulerSuggestions?.warning && (
+                  <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                    {schedulerSuggestions.warning}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1154,9 +1308,15 @@ function App() {
             <div className="flex justify-center pb-2">
               <button
                 onClick={acceptSuggestions}
+                disabled={
+                  !schedulerSuggestions?.bestSuggestion ||
+                  currentScheduleMatchesSuggestion
+                }
                 className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs font-medium"
               >
-                ✓ Accept Suggestions
+                {currentScheduleMatchesSuggestion
+                  ? "Current Schedule Already Best"
+                  : "✓ Accept Suggestions"}
               </button>
             </div>
           </div>
