@@ -3610,7 +3610,7 @@ function App() {
       )}
 
       {/* Top Alternatives - Moved to bottom */}
-      {currentView === "operations" && schedulerSuggestions?.suggestions.length > 0 && (
+      {currentView === "operations" && schedulerSuggestions?.suggestions && schedulerSuggestions.suggestions.length > 0 && (
         <div className="bg-white border-t border-gray-300">
           <div className="p-2">
             <div className="rounded border border-gray-200 bg-white p-2">
