@@ -30,6 +30,195 @@ export interface SyncStatus {
   message: string;
 }
 
+function areSerializedSnapshotsEqual(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  return (left ?? null) === (right ?? null);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergeScalarValue<T>(base: T, local: T, remote: T): T {
+  if (JSON.stringify(local) === JSON.stringify(remote)) {
+    return local;
+  }
+
+  if (JSON.stringify(base) === JSON.stringify(local)) {
+    return remote;
+  }
+
+  if (JSON.stringify(base) === JSON.stringify(remote)) {
+    return local;
+  }
+
+  return local;
+}
+
+function mergeArrayById<
+  T extends {
+    [key: string]: unknown;
+  },
+>(
+  idKey: keyof T,
+  baseItems: T[],
+  localItems: T[],
+  remoteItems: T[],
+): T[] {
+  const baseMap = new Map(baseItems.map((item) => [String(item[idKey]), item]));
+  const localMap = new Map(localItems.map((item) => [String(item[idKey]), item]));
+  const remoteMap = new Map(remoteItems.map((item) => [String(item[idKey]), item]));
+  const orderedIds = Array.from(
+    new Set([
+      ...remoteItems.map((item) => String(item[idKey])),
+      ...localItems.map((item) => String(item[idKey])),
+      ...baseItems.map((item) => String(item[idKey])),
+    ]),
+  );
+
+  return orderedIds.flatMap((id) => {
+    const baseItem = baseMap.get(id);
+    const localItem = localMap.get(id);
+    const remoteItem = remoteMap.get(id);
+
+    if (!baseItem) {
+      if (localItem && remoteItem) {
+        return [mergeUnknown(baseItem, localItem, remoteItem) as T];
+      }
+      return localItem ? [localItem] : remoteItem ? [remoteItem] : [];
+    }
+
+    if (!localItem && !remoteItem) {
+      return [];
+    }
+
+    if (!localItem) {
+      return JSON.stringify(baseItem) === JSON.stringify(remoteItem)
+        ? []
+        : remoteItem
+          ? [remoteItem]
+          : [];
+    }
+
+    if (!remoteItem) {
+      return JSON.stringify(baseItem) === JSON.stringify(localItem)
+        ? []
+        : [localItem];
+    }
+
+    return [mergeUnknown(baseItem, localItem, remoteItem) as T];
+  });
+}
+
+function mergeUnknown(base: unknown, local: unknown, remote: unknown): unknown {
+  if (Array.isArray(base) && Array.isArray(local) && Array.isArray(remote)) {
+    const localFirstItem = local[0];
+    const remoteFirstItem = remote[0];
+    const baseFirstItem = base[0];
+
+    if (
+      isPlainRecord(localFirstItem) &&
+      isPlainRecord(remoteFirstItem) &&
+      isPlainRecord(baseFirstItem)
+    ) {
+      if ("id" in localFirstItem && "id" in remoteFirstItem && "id" in baseFirstItem) {
+        return mergeArrayById(
+          "id",
+          base as Array<Record<string, unknown>>,
+          local as Array<Record<string, unknown>>,
+          remote as Array<Record<string, unknown>>,
+        );
+      }
+
+      if (
+        "code" in localFirstItem &&
+        "code" in remoteFirstItem &&
+        "code" in baseFirstItem
+      ) {
+        return mergeArrayById(
+          "code",
+          base as Array<Record<string, unknown>>,
+          local as Array<Record<string, unknown>>,
+          remote as Array<Record<string, unknown>>,
+        );
+      }
+    }
+
+    return mergeScalarValue(base, local, remote);
+  }
+
+  if (isPlainRecord(base) && isPlainRecord(local) && isPlainRecord(remote)) {
+    const keys = new Set([
+      ...Object.keys(base),
+      ...Object.keys(local),
+      ...Object.keys(remote),
+    ]);
+    const merged: Record<string, unknown> = {};
+
+    keys.forEach((key) => {
+      const baseValue = base[key];
+      const localValue = local[key];
+      const remoteValue = remote[key];
+
+      if (
+        baseValue !== undefined &&
+        localValue !== undefined &&
+        remoteValue !== undefined
+      ) {
+        merged[key] = mergeUnknown(baseValue, localValue, remoteValue);
+        return;
+      }
+
+      if (baseValue === undefined) {
+        merged[key] = localValue ?? remoteValue;
+        return;
+      }
+
+      if (localValue === undefined && remoteValue === undefined) {
+        return;
+      }
+
+      if (localValue === undefined) {
+        if (JSON.stringify(baseValue) !== JSON.stringify(remoteValue)) {
+          merged[key] = remoteValue;
+        }
+        return;
+      }
+
+      if (remoteValue === undefined) {
+        if (JSON.stringify(baseValue) !== JSON.stringify(localValue)) {
+          merged[key] = localValue;
+        }
+        return;
+      }
+    });
+
+    return merged;
+  }
+
+  return mergeScalarValue(base, local, remote);
+}
+
+function mergeSharedSnapshots(
+  baseSnapshot: SharedGameSnapshot | null,
+  localSnapshot: SharedGameSnapshot,
+  remoteSnapshot: SharedGameSnapshot | null,
+): SharedGameSnapshot {
+  if (!baseSnapshot) {
+    return remoteSnapshot ?? localSnapshot;
+  }
+
+  if (!remoteSnapshot) {
+    return localSnapshot;
+  }
+
+  return JSON.parse(
+    JSON.stringify(mergeUnknown(baseSnapshot, localSnapshot, remoteSnapshot)),
+  ) as SharedGameSnapshot;
+}
+
 interface AmplifySharedGameStateBindings {
   teamId: string;
   orders: Order[];
@@ -207,6 +396,12 @@ export function useAmplifySharedGameState(
             ? JSON.stringify(existing.data.snapshot)
             : null;
       const existingRevision = existing.data?.revision ?? 0;
+      const baseSnapshot = lastSavedRef.current
+        ? (JSON.parse(lastSavedRef.current) as SharedGameSnapshot)
+        : null;
+      const remoteSnapshot = existingSerialized
+        ? (JSON.parse(existingSerialized) as SharedGameSnapshot)
+        : null;
 
       if (existingSerialized === serialized) {
         lastSavedRef.current = serialized;
@@ -224,7 +419,37 @@ export function useAmplifySharedGameState(
       }
 
       if (existingRevision !== lastObservedRemoteRevisionRef.current) {
-        throw new Error("Remote state changed since last sync. Reload or resume before forcing outbound changes.");
+        if (!remoteSnapshot) {
+          throw new Error("Remote state changed since last sync.");
+        }
+
+        const mergedSnapshot = mergeSharedSnapshots(
+          baseSnapshot,
+          snapshot,
+          remoteSnapshot,
+        );
+        const mergedSerialized = JSON.stringify(mergedSnapshot);
+
+        if (existingSerialized === mergedSerialized) {
+          lastSavedRef.current = mergedSerialized;
+          lastObservedRemoteRevisionRef.current = existingRevision;
+          lastObservedRemoteSerializedRef.current = mergedSerialized;
+          if (!areSerializedSnapshotsEqual(serialized, mergedSerialized)) {
+            applyLocalState(deserializeSharedGameSnapshot(mergedSnapshot), {
+              skipNextPersist: true,
+              serialized: mergedSerialized,
+            });
+          }
+          return;
+        }
+
+        if (!areSerializedSnapshotsEqual(serialized, mergedSerialized)) {
+          applyLocalState(deserializeSharedGameSnapshot(mergedSnapshot), {
+            skipNextPersist: false,
+            serialized: null,
+          });
+          return;
+        }
       }
 
       const revision = existingRevision + 1;
@@ -276,6 +501,32 @@ export function useAmplifySharedGameState(
       serialized: JSON.stringify(snapshot),
     };
   });
+
+  const applyMergedSnapshot = useEffectEvent(
+    (
+      baseSerialized: string | null,
+      localSnapshot: SharedGameSnapshot,
+      remoteSnapshot: SharedGameSnapshot,
+    ) => {
+      const mergedSnapshot = mergeSharedSnapshots(
+        baseSerialized ? (JSON.parse(baseSerialized) as SharedGameSnapshot) : null,
+        localSnapshot,
+        remoteSnapshot,
+      );
+      const mergedSerialized = JSON.stringify(mergedSnapshot);
+      const remoteSerialized = JSON.stringify(remoteSnapshot);
+
+      applyLocalState(deserializeSharedGameSnapshot(mergedSnapshot), {
+        skipNextPersist: areSerializedSnapshotsEqual(
+          mergedSerialized,
+          remoteSerialized,
+        ),
+        serialized: areSerializedSnapshotsEqual(mergedSerialized, remoteSerialized)
+          ? mergedSerialized
+          : null,
+      });
+    },
+  );
 
   useEffect(() => {
     if (!isConfigured) {
@@ -384,7 +635,14 @@ export function useAmplifySharedGameState(
     deferredRemoteStateRef.current = null;
 
     if (localChangesWhilePausedRef.current) {
+      const { snapshot: localSnapshot } = buildCurrentSnapshot();
+      const remoteSnapshot = deferredState.serialized
+        ? (JSON.parse(deferredState.serialized) as SharedGameSnapshot)
+        : null;
       localChangesWhilePausedRef.current = false;
+      if (remoteSnapshot) {
+        applyMergedSnapshot(lastSavedRef.current, localSnapshot, remoteSnapshot);
+      }
       return;
     }
 
@@ -392,7 +650,13 @@ export function useAmplifySharedGameState(
       skipNextPersist: true,
       serialized: deferredState.serialized,
     });
-  }, [applyLocalState, bindings.isSyncPaused, bindings.shouldDeferIncomingSync]);
+  }, [
+    applyLocalState,
+    applyMergedSnapshot,
+    bindings.isSyncPaused,
+    bindings.shouldDeferIncomingSync,
+    buildCurrentSnapshot,
+  ]);
 
   useEffect(() => {
     if (!bindings.isSyncPaused || !isConfigured) {
