@@ -273,6 +273,7 @@ export const addOrder = (): Order => {
     size: "A5",
     verseSize: 4,
     occasion: "",
+    title: "",
     price: 2.0,
     available: true,
     status: "passive",

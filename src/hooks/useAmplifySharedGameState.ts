@@ -65,6 +65,7 @@ interface AmplifySharedGameStateBindings {
   setStationSpeedMultipliers: React.Dispatch<
     React.SetStateAction<StationSpeedMultipliers>
   >;
+  shouldDeferIncomingSync?: boolean;
 }
 
 export function useAmplifySharedGameState(
@@ -85,6 +86,10 @@ export function useAmplifySharedGameState(
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistBlockedUntilRef = useRef(0);
   const lastFailedSerializedRef = useRef<string | null>(null);
+  const deferredRemoteStateRef = useRef<{
+    nextState: DeserializedSharedGameState;
+    serialized: string | null;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,6 +274,14 @@ export function useAmplifySharedGameState(
           }),
         );
 
+        if (bindings.shouldDeferIncomingSync) {
+          deferredRemoteStateRef.current = {
+            nextState,
+            serialized,
+          };
+          return;
+        }
+
         applyLocalState(nextState, {
           skipNextPersist: true,
           serialized,
@@ -292,6 +305,23 @@ export function useAmplifySharedGameState(
       subscription.unsubscribe();
     };
   }, [bindings.teamId, isConfigured]);
+
+  useEffect(() => {
+    if (bindings.shouldDeferIncomingSync) {
+      return;
+    }
+
+    if (!deferredRemoteStateRef.current) {
+      return;
+    }
+
+    const deferredState = deferredRemoteStateRef.current;
+    deferredRemoteStateRef.current = null;
+    applyLocalState(deferredState.nextState, {
+      skipNextPersist: true,
+      serialized: deferredState.serialized,
+    });
+  }, [applyLocalState, bindings.shouldDeferIncomingSync]);
 
   useEffect(() => {
     if (!isConfigured || !initializedRef.current) {

@@ -580,14 +580,23 @@ export function StationView({
                       {gameState.getTeamId()}
                     </span>
                   </div>
-                  <div className="rounded-xl border-2 border-gray-200 bg-white px-6 py-5 shadow-sm">
-                    <div className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">
-                      Verse
+                  {stationNumber === 1 || stationNumber === 2 ? (
+                    <div>
+                      <span className="text-gray-600 font-medium">Verse:</span>
+                      <p className="mt-1 text-sm text-gray-900 whitespace-pre-line">
+                        {displayedVerse || `No verse for ${currentOrder.occasion}`}
+                      </p>
                     </div>
-                    <p className="min-h-[10vh] whitespace-pre-line text-[clamp(1.375rem,3vw,3rem)] font-black leading-[0.92] tracking-[-0.02em] text-gray-900">
-                      {displayedVerse || `No verse for ${currentOrder.occasion}`}
-                    </p>
-                  </div>
+                  ) : (
+                    <div className="rounded-xl border-2 border-gray-200 bg-white px-6 py-5 shadow-sm">
+                      <div className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">
+                        Verse
+                      </div>
+                      <p className="min-h-[10vh] whitespace-pre-line text-[clamp(1.375rem,3vw,3rem)] font-black leading-[0.92] tracking-[-0.02em] text-gray-900">
+                        {displayedVerse || `No verse for ${currentOrder.occasion}`}
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <div className="mb-1 flex justify-between text-xs font-semibold uppercase tracking-wide text-gray-500">
                       <span>Pipeline</span>
@@ -791,7 +800,7 @@ export function StationView({
                 Title Centering Tool
               </h3>
               <div className="bg-gray-50 rounded p-3">
-                <TitleCenteringTool />
+                <TitleCenteringTool currentOrder={currentOrder} />
               </div>
             </div>
           )}

@@ -489,6 +489,7 @@ function App() {
     browserPermissionHintVisible: false,
   });
   const [deliveryPrompts, setDeliveryPrompts] = useState<DeliveryPrompt[]>([]);
+  const [isSyncGuardActive, setIsSyncGuardActive] = useState(false);
   const syncStatus = useAmplifySharedGameState({
     teamId,
     orders,
@@ -523,6 +524,7 @@ function App() {
     setForecastSpeed,
     stationSpeedMultipliers,
     setStationSpeedMultipliers,
+    shouldDeferIncomingSync: isSyncGuardActive,
   });
 
   const buildSnapshotParameters = () => ({
@@ -1002,6 +1004,30 @@ function App() {
           : [...nextOrderIds],
       );
     });
+  }, []);
+
+  useEffect(() => {
+    const isGuardedElement = (target: EventTarget | null): boolean =>
+      target instanceof HTMLElement &&
+      Boolean(target.closest("[data-sync-guard='true']"));
+
+    const handleFocusChange = (event: FocusEvent) => {
+      if (isGuardedElement(event.target)) {
+        setIsSyncGuardActive(true);
+        return;
+      }
+
+      const nextFocusedElement = event.relatedTarget;
+      setIsSyncGuardActive(isGuardedElement(nextFocusedElement));
+    };
+
+    window.addEventListener("focusin", handleFocusChange);
+    window.addEventListener("focusout", handleFocusChange);
+
+    return () => {
+      window.removeEventListener("focusin", handleFocusChange);
+      window.removeEventListener("focusout", handleFocusChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -1842,7 +1868,7 @@ function App() {
                 </div>
 
                 {/* Orders Table */}
-                <div className="mb-2 overflow-x-auto">
+                <div className="mb-2 overflow-x-auto" data-sync-guard="true">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 border-b">
                   <tr>
@@ -1869,6 +1895,9 @@ function App() {
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Occasion
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Title
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Price
@@ -2219,6 +2248,21 @@ function App() {
                           )}
                       </td>
                       <td className="px-2 py-1">
+                        <input
+                          type="text"
+                          value={order.title || ""}
+                          onChange={(e) =>
+                            updateOrderField(
+                              order.id,
+                              "title",
+                              e.target.value,
+                            )
+                          }
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
+                          placeholder="Title..."
+                        />
+                      </td>
+                      <td className="px-2 py-1">
                         <div className="flex items-center">
                           <span className="mr-0.5 text-gray-500">£</span>
                           <input
@@ -2305,6 +2349,9 @@ function App() {
                       Occasion
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Title
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Price
                     </th>
                     <th className="px-2 py-1 text-center text-xs whitespace-nowrap">
@@ -2351,7 +2398,7 @@ function App() {
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
                 Suggested Orders
               </h3>
-              <div className="space-y-2">
+              <div className="space-y-2" data-sync-guard="true">
                 <div className="rounded border border-blue-200 bg-blue-50 p-2">
                   <div className="flex items-center justify-between gap-2">
                       <div>
