@@ -263,7 +263,7 @@ function buildRequiredPapers(
       };
     }
 
-    requiredPapers[ENVELOPE_CODE].orderRequirement += order.quantity;
+    requiredPapers[ENVELOPE_CODE].orderRequirement += 1; // Only 1 envelope per order
   });
 
   Object.values(requiredPapers).forEach((paperRequirement) => {

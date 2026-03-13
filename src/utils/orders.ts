@@ -23,7 +23,7 @@ export function getOrderInventoryRequirements(
 ): Record<string, number> {
   return {
     [order.paperColor.code]: order.quantity,
-    [ENVELOPE_CODE]: order.quantity,
+    [ENVELOPE_CODE]: 1, // Only 1 envelope per order
   };
 }
 
