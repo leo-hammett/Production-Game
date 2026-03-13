@@ -6,10 +6,15 @@ The software evaluates incoming orders based on expected profit per second, acco
 
 ## Key features include:
 Order evaluation and scheduling engine based on expected profit and completion risk
+
 Inventory management dashboard with real-time stock tracking and procurement planning
+
 Production monitoring interface for tracking station performance and order progress
+
 Worker workstation dashboards showing job queues, expected completion times, and visual card templates
+
 Transaction ledger for logging procurement and inter-team trades
+
 
 Processing times are modelled using time-study data and normal distributions, allowing the system to estimate the probability of late orders and adjust schedules accordingly.
 
