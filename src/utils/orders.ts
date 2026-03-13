@@ -5,11 +5,53 @@ import type {
   OrderStatus 
 } from './gameState';
 import { 
-  PaperColor, 
   PAPER_COLORS, 
   PAPER_COLOR_MAP, 
   gameState,
 } from './gameState';
+
+const PAPER_CONSUMING_STATUSES = new Set<OrderStatus>([
+  "WIP",
+  "sent",
+  "approved",
+  "failed",
+]);
+
+export function allocatePaperForOrderIfNeeded(
+  order: Order,
+  nextStatus: OrderStatus,
+  paperInventory: PaperInventory,
+): { order: Order; paperInventory: PaperInventory; allocatedNow: boolean } {
+  if (order.paperAllocated || !PAPER_CONSUMING_STATUSES.has(nextStatus)) {
+    return {
+      order,
+      paperInventory,
+      allocatedNow: false,
+    };
+  }
+
+  const colorCode = order.paperColor.code;
+  const availableQuantity = paperInventory[colorCode] || 0;
+  if (availableQuantity < order.quantity) {
+    return {
+      order,
+      paperInventory,
+      allocatedNow: false,
+    };
+  }
+
+  return {
+    order: {
+      ...order,
+      paperAllocated: true,
+    },
+    paperInventory: {
+      ...paperInventory,
+      [colorCode]: availableQuantity - order.quantity,
+    },
+    allocatedNow: true,
+  };
+}
 
 // Order constants
 export const OCCASIONS = [
@@ -155,6 +197,7 @@ export const addOrder = (): Order => {
     available: true,
     status: "passive",
     progress: 0,
+    paperAllocated: false,
   };
   return newOrder;
 };
@@ -184,7 +227,9 @@ export const updateOrder = (
   orders: Order[],
   id: string,
   field: keyof Order,
-  value: any,
+  value: unknown,
+  paperInventory: PaperInventory,
+  setPaperInventory: React.Dispatch<React.SetStateAction<PaperInventory>>,
   transactions: Transaction[],
   cash: number,
   setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>,
@@ -201,7 +246,8 @@ export const updateOrder = (
     
     // `order.price` is the total order value, not a per-unit amount.
     const orderRevenue = order.price;
-    const failureFine = orderRevenue * failureFineRatio;
+    const paperWorth = gameState.calculatePaperCurrentWorth(order.paperColor);
+    const failureFine = orderRevenue * failureFineRatio + paperWorth * order.quantity;
     
     // If changing to failed status, add a fine transaction
     if (newStatus === "failed" && oldStatus !== "failed") {
@@ -210,7 +256,7 @@ export const updateOrder = (
         timestamp: new Date(),
         amount: -failureFine,
         type: "cash",
-        reason: `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total): ${order.quantity}x ${order.occasion || 'cards'}`,
+        reason: `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total plus paper): ${order.quantity}x ${order.occasion || 'cards'}`,
         orderId: order.id,
       };
       setTransactions(prev => [...prev, fineTransaction]);
@@ -273,38 +319,51 @@ export const updateOrder = (
     const activeStatuses = ["ordered", "pending_inventory", "WIP", "sent", "approved"];
     const inactiveStatuses = ["passive", "failed", "deleted", "other"];
     
-    const updatedOrder = { ...order, [field]: value };
     const nextStatus = value as OrderStatus;
+    const updatedOrder: Order = {
+      ...order,
+      status: nextStatus,
+    };
+
+    const allocationResult = allocatePaperForOrderIfNeeded(
+      updatedOrder,
+      nextStatus,
+      paperInventory,
+    );
+    const nextOrder = allocationResult.order;
+    if (allocationResult.allocatedNow) {
+      setPaperInventory(allocationResult.paperInventory);
+    }
 
     if (nextStatus === "pending_inventory") {
-      updatedOrder.progress = 0;
+      nextOrder.progress = 0;
     } else if (
       (nextStatus === "ordered" || nextStatus === "WIP") &&
-      updatedOrder.progress === 0
+      nextOrder.progress === 0
     ) {
-      updatedOrder.progress = 1;
+      nextOrder.progress = 1;
     } else if (nextStatus === "sent" || nextStatus === "approved") {
-      updatedOrder.progress = 3;
+      nextOrder.progress = 3;
     }
     
     // If moving from inactive to active status, set startTime and dueTime
     if (inactiveStatuses.includes(order.status) && activeStatuses.includes(value as string)) {
-      if (!updatedOrder.startTime) {
-        updatedOrder.startTime = Date.now();
+      if (!nextOrder.startTime) {
+        nextOrder.startTime = Date.now();
       }
-      if (!updatedOrder.dueTime && updatedOrder.leadTime > 0) {
-        updatedOrder.dueTime = updatedOrder.startTime + (updatedOrder.leadTime * 60 * 1000); // leadTime is in minutes
+      if (!nextOrder.dueTime && nextOrder.leadTime > 0) {
+        nextOrder.dueTime = nextOrder.startTime + (nextOrder.leadTime * 60 * 1000); // leadTime is in minutes
       }
     }
     
     // If moving from active to inactive status, clear startTime and dueTime
     if (activeStatuses.includes(order.status) && inactiveStatuses.includes(value as string)) {
-      delete updatedOrder.startTime;
-      delete updatedOrder.dueTime;
+      delete nextOrder.startTime;
+      delete nextOrder.dueTime;
     }
     
     return orders.map((o) =>
-      o.id === id ? updatedOrder : o,
+      o.id === id ? nextOrder : o,
     );
   }
   

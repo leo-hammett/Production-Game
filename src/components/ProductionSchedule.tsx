@@ -8,7 +8,7 @@ import type { StationProjectionMatrix } from "../utils/stationProgress";
 
 interface ProductionScheduleProps {
   orders: Order[];
-  updateOrderField: (id: string, field: keyof Order, value: any) => void;
+  updateOrderField: (id: string, field: keyof Order, value: unknown) => void;
   scheduleOrderIds: string[];
   onReorderSchedule?: (orderIds: string[]) => void;
   currentTime?: number;
@@ -32,14 +32,14 @@ export function ProductionSchedule({
   updateOrderField,
   scheduleOrderIds,
   onReorderSchedule,
-  currentTime = Date.now(),
+  currentTime,
   isStationMode = false,
   onOrderClick,
   currentOrderId,
   stationNumber,
   stationSchedule,
 }: ProductionScheduleProps) {
-  const [now, setNow] = useState(currentTime);
+  const [now, setNow] = useState(() => currentTime ?? Date.now());
   const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
   const [dragTarget, setDragTarget] = useState<{
     orderId: string;
@@ -302,7 +302,7 @@ export function ProductionSchedule({
                         </button>
                       )}
                       <span className="rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide">
-                        Queue {queuePosition}
+                        Priority {queuePosition}
                       </span>
                       <span className="font-mono text-xs opacity-60">
                         {order.id.slice(-6)}

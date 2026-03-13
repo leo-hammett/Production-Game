@@ -318,6 +318,7 @@ export function generateForecastOrders(
       available: true,
       status: "passive",
       progress: 0,
+      paperAllocated: false,
     });
     orderIndex += 1;
   }

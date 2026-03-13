@@ -144,8 +144,9 @@ export function getOptionalOrders(orders: Order[]): Order[] {
 export function calculateCostOfFailure(
   order: Order,
   failureFineRatio: number,
+  paperWorth: number,
 ): number {
-  return order.price * failureFineRatio;
+  return order.price * failureFineRatio + paperWorth * order.quantity;
 }
 
 export function estimateOrderTimeDistribution(
@@ -327,9 +328,11 @@ export function evaluateScheduleCandidate(
       const baseProfit =
         order.price -
         order.quantity * context.calculatePaperCurrentWorth(order.paperColor);
+      const paperWorth = context.calculatePaperCurrentWorth(order.paperColor);
       const failureFine = calculateCostOfFailure(
         order,
         context.parameters.failureFineRatio,
+        paperWorth,
       );
       const expectedValue =
         baseProfit * successProbability -

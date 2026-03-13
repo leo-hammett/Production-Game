@@ -11,6 +11,7 @@ import type {
   OrderStatus,
 } from "./utils/gameState";
 import {
+  allocatePaperForOrderIfNeeded,
   addOrder,
   deleteRecentOrder,
   normalizeScheduleOrderIds,
@@ -80,6 +81,13 @@ interface BackupStatusState {
   pendingSince: number | null;
   lastError: string | null;
   browserPermissionHintVisible: boolean;
+}
+
+interface DeliveryPrompt {
+  id: string;
+  title: string;
+  message: string;
+  orderIds: string[];
 }
 
 function getStoredBoolean(key: string, fallback: boolean): boolean {
@@ -165,6 +173,17 @@ function formatTimestamp(value: number | null): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function isSchedulerPaperTransaction(reason: string | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+
+  return (
+    reason.includes("Suggested schedule paper order") ||
+    reason.includes("Current schedule paper order")
+  );
 }
 
 function formatSuccessRate(schedule: RankedScheduleCandidate | null): string {
@@ -330,6 +349,7 @@ function App() {
     lastError: null,
     browserPermissionHintVisible: false,
   });
+  const [deliveryPrompts, setDeliveryPrompts] = useState<DeliveryPrompt[]>([]);
   const syncStatus = useAmplifySharedGameState({
     teamId,
     orders,
@@ -429,6 +449,7 @@ function App() {
       bestPlan: null,
     });
     setClearedSuggestedPaperPlanId(null);
+    setDeliveryPrompts([]);
   };
 
   const triggerJsonBackupDownload = (mode: "manual" | "auto", date = new Date()) => {
@@ -581,6 +602,8 @@ function App() {
       id,
       field,
       value,
+      paperInventory,
+      setPaperInventory,
       transactions,
       cash,
       setTransactions,
@@ -685,7 +708,7 @@ function App() {
     const activationTime = Date.now();
     const bestSuggestionIdSet = new Set(bestSuggestion.orderIds);
     const orderMap = new Map(orders.map((order) => [order.id, order]));
-    const availablePaperByColor: Record<string, number> = { ...paperInventory };
+    let availablePaperByColor: Record<string, number> = { ...paperInventory };
     const nextStatusesByOrderId = new Map<
       string,
       { status: OrderStatus; progress: number; startTime: number; dueTime?: number }
@@ -720,8 +743,15 @@ function App() {
         return order;
       }
 
+      const allocationResult = allocatePaperForOrderIfNeeded(
+        order,
+        nextState.status,
+        availablePaperByColor,
+      );
+      availablePaperByColor = allocationResult.paperInventory;
+
       return {
-        ...order,
+        ...allocationResult.order,
         status: nextState.status,
         progress: nextState.progress,
         startTime: nextState.startTime,
@@ -735,6 +765,7 @@ function App() {
     );
 
     setOrders(nextOrders);
+    setPaperInventory(availablePaperByColor);
     if (paperTransactions.length) {
       setTransactions((currentTransactions) => [
         ...currentTransactions,
@@ -1188,6 +1219,94 @@ function App() {
           })
           .join(" -> ")
       : "No schedulable orders";
+  const renderSchedulePriorityList = (
+    schedule: RankedScheduleCandidate | null,
+    tone: "green" | "gray" = "gray",
+  ) => {
+    if (!schedule?.orderIds.length) {
+      return null;
+    }
+
+    const itemClass =
+      tone === "green"
+        ? "border-green-200 bg-white/70 text-green-900"
+        : "border-gray-200 bg-white text-gray-700";
+    const badgeClass =
+      tone === "green"
+        ? "bg-green-100 text-green-800"
+        : "bg-gray-100 text-gray-700";
+
+    return (
+      <ol className="mt-2 space-y-1">
+        {schedule.orderIds.map((orderId, index) => {
+          const order = orderMap.get(orderId);
+          const label = order
+            ? `${order.quantity}x ${order.occasion || "Cards"} (${order.paperColor.code.toUpperCase()})`
+            : orderId.slice(-6);
+
+          return (
+            <li
+              key={`${schedule.id}-${orderId}`}
+              className={`flex items-center gap-2 rounded border px-2 py-1 text-[11px] ${itemClass}`}
+            >
+              <span className={`rounded px-1.5 py-0.5 font-bold ${badgeClass}`}>
+                {index + 1}
+              </span>
+              <span>{label}</span>
+            </li>
+          );
+        })}
+      </ol>
+    );
+  };
+  const dismissDeliveryPrompt = (promptId: string) => {
+    setDeliveryPrompts((currentPrompts) =>
+      currentPrompts.filter((prompt) => prompt.id !== promptId),
+    );
+  };
+  const queueDeliveryPrompt = (
+    transaction: Transaction,
+    nextInventory: PaperInventory,
+  ) => {
+    if (!isSchedulerPaperTransaction(transaction.reason) || !transaction.paperColor) {
+      return;
+    }
+
+    const suggestedOrders = orders.filter((order) => {
+      if (
+        order.status !== "pending_inventory" ||
+        order.paperAllocated ||
+        order.paperColor.code !== transaction.paperColor
+      ) {
+        return false;
+      }
+
+      return (nextInventory[transaction.paperColor!] || 0) >= order.quantity;
+    });
+
+    if (!suggestedOrders.length) {
+      return;
+    }
+
+    const promptId = `delivery-${transaction.id}`;
+    setDeliveryPrompts((currentPrompts) => {
+      if (currentPrompts.some((prompt) => prompt.id === promptId)) {
+        return currentPrompts;
+      }
+
+      const prompt: DeliveryPrompt = {
+        id: promptId,
+        title: "Paper delivery received",
+        message:
+          suggestedOrders.length === 1
+            ? `Paper for ${suggestedOrders[0].quantity}x ${suggestedOrders[0].occasion || "Cards"} is now in stock. Consider changing its status from Pending.`
+            : `${suggestedOrders.length} pending orders now have paper in stock. Consider reviewing their status.`,
+        orderIds: suggestedOrders.map((order) => order.id),
+      };
+
+      return [...currentPrompts, prompt];
+    });
+  };
 
   const currentScheduleMatchesSuggestion = Boolean(
     schedulerSuggestions?.bestSuggestion &&
@@ -1213,6 +1332,7 @@ function App() {
     !schedulerSuggestions?.bestSuggestion ||
     currentScheduleMatchesSuggestion ||
     (suggestedPlanNeedsPaperOrder && buyingCooldownRemainingSeconds > 0);
+  const isOperationsView = currentView === "operations";
   const backupStatusLabel = autoBackupEnabled
     ? backupStatus.pendingSince
       ? `Auto backup waiting for 10s idle since ${formatTimestamp(backupStatus.pendingSince)}`
@@ -1351,6 +1471,7 @@ function App() {
       ...resetParameters.stationSpeedMultipliers,
     });
     setClearedSuggestedPaperPlanId(null);
+    setDeliveryPrompts([]);
   };
 
   // Complete a pending transaction
@@ -1369,10 +1490,14 @@ function App() {
     
     // Now add to inventory
     if (trans.paperColor && trans.paperQuantity !== undefined) {
-      setPaperInventory((prev) => ({
-        ...prev,
-        [trans.paperColor!]: (prev[trans.paperColor!] || 0) + trans.paperQuantity!,
-      }));
+      setPaperInventory((prev) => {
+        const nextInventory = {
+          ...prev,
+          [trans.paperColor!]: (prev[trans.paperColor!] || 0) + trans.paperQuantity!,
+        };
+        queueDeliveryPrompt(trans, nextInventory);
+        return nextInventory;
+      });
     }
   }
 
@@ -1483,72 +1608,51 @@ function App() {
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-2 border-l border-gray-600 pl-4">
-              <button
-                onClick={() => {
-                  triggerJsonBackupDownload("manual");
-                }}
-                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
-              >
-                Export JSON
-              </button>
-              <button
-                onClick={triggerCsvBackupDownload}
-                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
-              >
-                Export CSV
-              </button>
-              <button
-                onClick={openImportPicker}
-                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
-              >
-                Import JSON
-              </button>
-              <label className="flex items-center gap-2 text-xs text-gray-200">
-                <input
-                  type="checkbox"
-                  checked={autoBackupEnabled}
-                  onChange={(event) => setAutoBackupEnabled(event.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-gray-500 bg-gray-800"
-                />
-                Auto backup every 10 min
-              </label>
-            </div>
-
-            <div className="flex max-w-md flex-col border-l border-gray-600 pl-4">
-              <span className={`text-xs font-medium ${backupStatusClass}`}>
-                {backupStatus.lastError || backupStatusLabel}
-              </span>
-              {backupStatus.browserPermissionHintVisible && autoBackupEnabled && (
-                <span className="text-[11px] text-gray-400">
-                  If downloads stop appearing, allow automatic downloads for this site.
+            {isOperationsView ? (
+              <div className="flex items-center gap-2 border-l border-gray-600 pl-4">
+                <span className={`text-xs font-medium ${getSyncStatusClass(syncStatus.state)}`}>
+                  {syncStatus.message}
                 </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 border-l border-gray-600 pl-4">
-              <span className={`text-xs font-medium ${getSyncStatusClass(syncStatus.state)}`}>
-                {syncStatus.message}
-              </span>
-              <input
-                type="text"
-                value={teamIdInput}
-                onChange={(e) => setTeamIdInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    applyTeamId();
-                  }
-                }}
-                className="w-28 rounded border border-gray-500 bg-gray-800 px-2 py-1 text-xs text-white"
-                placeholder="TEAM ID"
-              />
-              <button
-                onClick={applyTeamId}
-                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
-              >
-                Join
-              </button>
-            </div>
+                <input
+                  type="text"
+                  value={teamIdInput}
+                  onChange={(e) => setTeamIdInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      applyTeamId();
+                    }
+                  }}
+                  className="w-28 rounded border border-gray-500 bg-gray-800 px-2 py-1 text-xs text-white"
+                  placeholder="TEAM ID"
+                />
+                <button
+                  onClick={applyTeamId}
+                  className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
+                >
+                  Join
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center border-l border-gray-600 pl-4">
+                <span
+                  className={`flex h-6 w-6 items-center justify-center rounded-full text-sm font-bold ${
+                    syncStatus.state === "synced"
+                      ? "bg-green-500/20 text-green-300"
+                      : syncStatus.state === "error"
+                        ? "bg-red-500/20 text-red-300"
+                        : "border-2 border-white/30 border-t-white text-transparent animate-spin"
+                  }`}
+                  title={syncStatus.message}
+                  aria-label={syncStatus.message}
+                >
+                  {syncStatus.state === "synced"
+                    ? "✓"
+                    : syncStatus.state === "error"
+                      ? "!"
+                      : "."}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2218,6 +2322,10 @@ function App() {
                           ? describeSchedule(schedulerSuggestions.bestSuggestion)
                           : "No schedulable plan available yet."}
                       </div>
+                      {renderSchedulePriorityList(
+                        schedulerSuggestions?.bestSuggestion ?? null,
+                        "green",
+                      )}
                     </div>
                     <div className="text-right text-[11px] text-green-900">
                       <div>
@@ -2264,6 +2372,9 @@ function App() {
                     <div className="text-[11px] text-gray-700">
                       <div className="font-semibold text-gray-800">Current Plan</div>
                       <div>{describeSchedule(schedulerSuggestions?.currentSchedule ?? null)}</div>
+                      {renderSchedulePriorityList(
+                        schedulerSuggestions?.currentSchedule ?? null,
+                      )}
                     </div>
                     <div className="text-right text-[11px] text-gray-700">
                       <div>
@@ -2332,6 +2443,7 @@ function App() {
                               <div>£{schedule.expectedProfit.toFixed(2)}</div>
                             </div>
                           </div>
+                          {renderSchedulePriorityList(schedule)}
                         </div>
                       ))}
                     </div>
@@ -3141,19 +3253,68 @@ function App() {
                 <div className="text-gray-500">Reminder: add charts if possible.</div>
               </div>
 
-              <div className="mt-3 flex justify-end">
-                <button
-                  onClick={resetGameState}
-                  className="rounded bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800"
-                >
-                  Reset Game
-                </button>
+	              <div className="mt-3 flex justify-end">
+	                <button
+	                  onClick={resetGameState}
+	                  className="rounded bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800"
+	                >
+	                  Reset Game
+	                </button>
+	              </div>
+
+              <div className="mt-3 rounded border border-gray-200 bg-white p-3 text-xs">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800">
+                      Backup and Export
+                    </h3>
+                    <div className={`mt-1 font-medium ${backupStatusClass}`}>
+                      {backupStatus.lastError || backupStatusLabel}
+                    </div>
+                    {backupStatus.browserPermissionHintVisible && autoBackupEnabled && (
+                      <div className="mt-1 text-[11px] text-gray-500">
+                        If downloads stop appearing, allow automatic downloads for this site.
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => {
+                        triggerJsonBackupDownload("manual");
+                      }}
+                      className="rounded bg-gray-700 px-3 py-2 text-xs font-medium text-white hover:bg-gray-600"
+                    >
+                      Export JSON
+                    </button>
+                    <button
+                      onClick={triggerCsvBackupDownload}
+                      className="rounded bg-gray-700 px-3 py-2 text-xs font-medium text-white hover:bg-gray-600"
+                    >
+                      Export CSV
+                    </button>
+                    <button
+                      onClick={openImportPicker}
+                      className="rounded bg-gray-700 px-3 py-2 text-xs font-medium text-white hover:bg-gray-600"
+                    >
+                      Import JSON
+                    </button>
+                    <label className="flex items-center gap-2 rounded border border-gray-200 px-3 py-2 text-xs text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={autoBackupEnabled}
+                        onChange={(event) => setAutoBackupEnabled(event.target.checked)}
+                        className="h-4 w-4 rounded"
+                      />
+                      Auto backup every 10 min
+                    </label>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
-        </>
+	            </div>
+	          </div>
+	        </div>
+	      </div>
+	        </>
       ) : (
         /* Station Views */
         <div className="h-screen bg-gray-100">
@@ -3164,9 +3325,54 @@ function App() {
             updateOrderField={updateOrderField}
             scheduleOrderIds={scheduleOrderIds}
             currentTime={currentTime}
+            paperInventory={paperInventory}
+            setPaperInventory={setPaperInventory}
             stationSpeedMultipliers={stationSpeedMultipliers}
             updateStationSpeedMultiplier={updateStationSpeedMultiplier}
           />
+        </div>
+      )}
+
+      {deliveryPrompts.length > 0 && (
+        <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex max-w-sm flex-col gap-3">
+          {deliveryPrompts.map((prompt) => (
+            <div
+              key={prompt.id}
+              className="pointer-events-auto rounded-lg border border-emerald-200 bg-white p-3 shadow-lg"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-emerald-800">
+                    {prompt.title}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-700">
+                    {prompt.message}
+                  </div>
+                  <div className="mt-2 text-[11px] text-gray-500">
+                    Orders:{" "}
+                    {prompt.orderIds.map((orderId) => orderId.slice(-6)).join(", ")}
+                  </div>
+                </div>
+                <button
+                  onClick={() => dismissDeliveryPrompt(prompt.id)}
+                  className="rounded px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-100"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  onClick={() => {
+                    setCurrentView("operations");
+                    dismissDeliveryPrompt(prompt.id);
+                  }}
+                  className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                >
+                  Review in Operations
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

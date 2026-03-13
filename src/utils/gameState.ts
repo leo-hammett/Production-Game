@@ -112,6 +112,7 @@ export interface Order {
   startTime?: number;
   dueTime?: number;
   selectedVerse?: string; // The actual verse text selected for this order (TODO)
+  paperAllocated: boolean;
   stationTasks?: OrderStationTasks;
 }
 

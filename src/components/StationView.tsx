@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { ProductionSchedule } from "./ProductionSchedule";
-import { gameState, type Order, type StationNumber } from "../utils/gameState";
-import { getScheduledProductionOrders } from "../utils/orders";
+import {
+  gameState,
+  type Order,
+  type PaperInventory,
+  type StationNumber,
+} from "../utils/gameState";
+import {
+  allocatePaperForOrderIfNeeded,
+  getScheduledProductionOrders,
+} from "../utils/orders";
 import { STATION_IDS, type StationSpeedMultipliers } from "../utils/station";
 import {
   calculateStationSchedule,
@@ -16,9 +24,11 @@ interface StationViewProps {
   stationNumber: number;
   orders: Order[];
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
-  updateOrderField: (id: string, field: keyof Order, value: any) => void;
+  updateOrderField: (id: string, field: keyof Order, value: unknown) => void;
   scheduleOrderIds: string[];
   currentTime: number;
+  paperInventory: PaperInventory;
+  setPaperInventory: React.Dispatch<React.SetStateAction<PaperInventory>>;
   stationSpeedMultipliers: StationSpeedMultipliers;
   updateStationSpeedMultiplier: (
     stationKey: keyof StationSpeedMultipliers,
@@ -109,6 +119,8 @@ export function StationView({
   updateOrderField,
   scheduleOrderIds,
   currentTime,
+  paperInventory,
+  setPaperInventory,
   stationSpeedMultipliers,
   updateStationSpeedMultiplier,
 }: StationViewProps) {
@@ -133,29 +145,11 @@ export function StationView({
       order.status !== "approved" &&
       order.status !== "failed",
   );
-  const stationQueueKey = stationQueue.map((order) => order.id).join("|");
   const stationSchedule = calculateStationSchedule(
     orders,
     scheduleOrderIds,
     currentTime,
   );
-
-  useEffect(() => {
-    setCurrentOrderId((currentSelection) => {
-      if (!stationQueue.length) {
-        return null;
-      }
-
-      if (
-        currentSelection &&
-        stationQueue.some((order) => order.id === currentSelection)
-      ) {
-        return currentSelection;
-      }
-
-      return stationQueue[0].id;
-    });
-  }, [stationQueueKey]);
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -186,7 +180,11 @@ export function StationView({
     };
   }, [isDragging]);
 
-  const currentOrder = orders.find((order) => order.id === currentOrderId);
+  const resolvedCurrentOrderId =
+    currentOrderId && stationQueue.some((order) => order.id === currentOrderId)
+      ? currentOrderId
+      : stationQueue[0]?.id ?? null;
+  const currentOrder = orders.find((order) => order.id === resolvedCurrentOrderId);
   const currentTask = currentOrder
     ? getOrderStationTask(currentOrder, stationIndex)
     : undefined;
@@ -252,6 +250,26 @@ export function StationView({
     );
   };
 
+  const applyStatusWithPaperAllocation = (
+    order: Order,
+    nextStatus: Order["status"],
+  ): Order => {
+    const allocationResult = allocatePaperForOrderIfNeeded(
+      order,
+      nextStatus,
+      paperInventory,
+    );
+
+    if (allocationResult.allocatedNow) {
+      setPaperInventory(allocationResult.paperInventory);
+    }
+
+    return {
+      ...allocationResult.order,
+      status: nextStatus,
+    };
+  };
+
   const handleStartJob = () => {
     if (!currentOrder) {
       return;
@@ -271,8 +289,7 @@ export function StationView({
           : undefined);
 
       return {
-        ...order,
-        status: "WIP",
+        ...applyStatusWithPaperAllocation(order, "WIP"),
         startTime: nextStartTime,
         dueTime: nextDueTime,
         stationTasks: {
@@ -303,8 +320,7 @@ export function StationView({
 
       if (existingTask.isPaused || !existingTask.activeSince) {
         return {
-          ...order,
-          status: "WIP",
+          ...applyStatusWithPaperAllocation(order, "WIP"),
           stationTasks: {
             ...order.stationTasks,
             [orderStationKey]: {
@@ -322,8 +338,7 @@ export function StationView({
         Math.max(currentTime - existingTask.activeSince, 0);
 
       return {
-        ...order,
-        status: "WIP",
+        ...applyStatusWithPaperAllocation(order, "WIP"),
         stationTasks: {
           ...order.stationTasks,
           [orderStationKey]: {
@@ -352,9 +367,11 @@ export function StationView({
       const accumulatedActiveMs = getStationActualElapsedMs(existingTask, currentTime);
 
       return {
-        ...order,
+        ...applyStatusWithPaperAllocation(
+          order,
+          stationIndex === 3 ? "sent" : "ordered",
+        ),
         progress: stationIndex === 3 ? 3 : stationIndex + 1,
-        status: stationIndex === 3 ? "sent" : "ordered",
         stationTasks: {
           ...order.stationTasks,
           [orderStationKey]: {
@@ -598,7 +615,7 @@ export function StationView({
                     key={order.id}
                     onClick={() => setCurrentOrderId(order.id)}
                     className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
-                      currentOrderId === order.id
+                      resolvedCurrentOrderId === order.id
                         ? "border-blue-500 ring-1 ring-blue-300"
                         : ""
                     }`}
@@ -909,7 +926,7 @@ export function StationView({
               currentTime={currentTime}
               isStationMode={true}
               onOrderClick={setCurrentOrderId}
-              currentOrderId={currentOrderId}
+              currentOrderId={resolvedCurrentOrderId}
               stationNumber={stationIndex}
               stationSchedule={stationSchedule}
             />
