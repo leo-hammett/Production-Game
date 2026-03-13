@@ -13,6 +13,7 @@ import type {
 import {
   allocatePaperForOrderIfNeeded,
   addOrder,
+  createOrderAllocationTransactions,
   deleteRecentOrder,
   hasInventoryForOrder,
   normalizeScheduleOrderIds,
@@ -23,6 +24,7 @@ import { StationView } from "./components/StationView";
 import type {
   PaperInventory,
   Transaction,
+  TransactionMetadata,
 } from "./utils/gameState";
 import { useAmplifySharedGameState } from "./hooks/useAmplifySharedGameState";
 import {
@@ -68,6 +70,14 @@ import {
   estimateLitePlanTotalProfit,
   type PlanForecastResult,
 } from "./utils/orderForecasting";
+import {
+  buildFinancialHistory,
+  calculateFinancialMetrics,
+  getTransactionCategoryLabel,
+  isManualTransaction,
+  resolveTransactionMetadata,
+  transactionAffectsTrackedInventory,
+} from "./utils/financials";
 
 type ViewType = "operations" | "station1" | "station2" | "station3";
 const SCHEDULER_ENABLED_STORAGE_KEY = "production-game/device-enable-scheduler";
@@ -176,6 +186,128 @@ function formatTimestamp(value: number | null): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function formatLedgerTime(date: Date): string {
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function getTransactionStatusLabel(
+  transaction: Transaction,
+  currentTime: number,
+): string {
+  if (!transaction.pending) {
+    return "Posted";
+  }
+
+  if (!transaction.arrivalTime) {
+    return "Pending";
+  }
+
+  return `Pending ${Math.max(
+    0,
+    Math.ceil((transaction.arrivalTime - currentTime) / 1000),
+  )}s`;
+}
+
+function buildChartPath(
+  points: Array<{ x: number; y: number }>,
+  width: number,
+  height: number,
+): string {
+  if (!points.length) {
+    return "";
+  }
+
+  const values = points.map((point) => point.y);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valueRange = maxValue - minValue || 1;
+
+  return points
+    .map((point, index) => {
+      const x =
+        points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
+      const y = height - ((point.y - minValue) / valueRange) * height;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function SimpleLineChart({
+  title,
+  colorClass,
+  points,
+  valueSelector,
+}: {
+  title: string;
+  colorClass: string;
+  points: ReturnType<typeof buildFinancialHistory>;
+  valueSelector: (point: ReturnType<typeof buildFinancialHistory>[number]) => number;
+}) {
+  const chartPoints = points.map((point) => ({
+    x: point.timestamp,
+    y: valueSelector(point),
+  }));
+  const values = chartPoints.map((point) => point.y);
+  const currentValue = values.length ? values[values.length - 1] : 0;
+  const minValue = values.length ? Math.min(...values) : 0;
+  const maxValue = values.length ? Math.max(...values) : 0;
+  const path = buildChartPath(chartPoints, 320, 120);
+
+  return (
+    <div className="rounded border border-gray-200 bg-white p-3">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-gray-800">{title}</h4>
+          <div className="text-[11px] text-gray-500">
+            {points.length
+              ? `${points.length} transaction points`
+              : "No transaction history yet"}
+          </div>
+        </div>
+        <div className={`text-sm font-semibold ${colorClass}`}>
+          {formatCurrency(currentValue)}
+        </div>
+      </div>
+      <svg
+        viewBox="0 0 320 120"
+        className="h-32 w-full rounded bg-gray-50"
+        role="img"
+        aria-label={title}
+      >
+        <line x1="0" y1="119" x2="320" y2="119" stroke="#d1d5db" strokeWidth="1" />
+        <line x1="0" y1="1" x2="0" y2="119" stroke="#d1d5db" strokeWidth="1" />
+        {path ? (
+          <path
+            d={path}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            className={colorClass}
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : (
+          <text
+            x="160"
+            y="64"
+            textAnchor="middle"
+            className="fill-gray-400 text-[11px]"
+          >
+            Waiting for transactions
+          </text>
+        )}
+      </svg>
+      <div className="mt-2 flex justify-between text-[11px] text-gray-500">
+        <span>Min {formatCurrency(minValue)}</span>
+        <span>Max {formatCurrency(maxValue)}</span>
+      </div>
+    </div>
+  );
 }
 
 function isSchedulerInventoryTransaction(reason: string | undefined): boolean {
@@ -329,7 +461,6 @@ function App() {
       currentPlan: null,
       bestPlan: null,
     });
-  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const schedulerTimeBucket = Math.floor(currentTime / 30000) * 30000;
   const liteForecastMinuteBucket = Math.floor(currentTime / 60000) * 60000;
@@ -683,6 +814,14 @@ function App() {
         undefined,
         true,
         paperDeliverySeconds * 1000,
+        {
+          category: "paper_purchase",
+          financeBucket: "cost_of_sales",
+          metricContribution: Math.abs(
+            requirement.totalNeeded * getColorPrice(colorCode),
+          ),
+          inventoryValueDelta: 0,
+        },
       ),
     );
   };
@@ -716,6 +855,7 @@ function App() {
     const bestSuggestionIdSet = new Set(bestSuggestion.orderIds);
     const orderMap = new Map(orders.map((order) => [order.id, order]));
     let availablePaperByColor: Record<string, number> = { ...paperInventory };
+    const allocationTransactions: Transaction[] = [];
     const nextStatusesByOrderId = new Map<
       string,
       {
@@ -740,6 +880,12 @@ function App() {
       );
       if (previewAllocation.allocatedNow) {
         availablePaperByColor = previewAllocation.paperInventory;
+        allocationTransactions.push(
+          ...createOrderAllocationTransactions(
+            previewAllocation.order,
+            "inventory_allocation",
+          ),
+        );
       }
 
       const startTime = order.startTime ?? activationTime;
@@ -780,6 +926,7 @@ function App() {
     if (paperTransactions.length) {
       setTransactions((currentTransactions) => [
         ...currentTransactions,
+        ...allocationTransactions,
         ...paperTransactions,
       ]);
       setCash((currentCash) =>
@@ -787,6 +934,11 @@ function App() {
         paperTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
       );
       gameState.startBuyingCooldown(buyingCooldown);
+    } else if (allocationTransactions.length) {
+      setTransactions((currentTransactions) => [
+        ...currentTransactions,
+        ...allocationTransactions,
+      ]);
     }
     setScheduleOrderIds(bestSuggestion.orderIds);
     gameState.updateScheduleOrderIds(bestSuggestion.orderIds);
@@ -1346,6 +1498,17 @@ function App() {
     currentScheduleMatchesSuggestion ||
     (suggestedPlanNeedsPaperOrder && buyingCooldownRemainingSeconds > 0);
   const isOperationsView = currentView === "operations";
+  const financialMetrics = calculateFinancialMetrics(
+    transactions,
+    paperInventory,
+    cash,
+  );
+  const financialHistory = buildFinancialHistory(transactions);
+  const transactionsDescending = [...transactions].sort(
+    (left, right) =>
+      right.timestamp.getTime() - left.timestamp.getTime() ||
+      right.id.localeCompare(left.id),
+  );
   const backupStatusLabel = autoBackupEnabled
     ? backupStatus.pendingSince
       ? `Auto backup waiting for 10s idle since ${formatTimestamp(backupStatus.pendingSince)}`
@@ -1367,6 +1530,7 @@ function App() {
     orderId?: string,
     pending?: boolean,
     deliveryTime?: number,
+    metadata?: TransactionMetadata,
   ) => {
     const newTransaction = gameState.createTransaction(
       amount,
@@ -1376,54 +1540,17 @@ function App() {
       paperQuantity,
       orderId,
       pending,
-      deliveryTime
+      deliveryTime,
+      metadata,
     );
 
-    setTransactions([...transactions, newTransaction]);
+    setTransactions((currentTransactions) => [...currentTransactions, newTransaction]);
     setCash((prev) => prev + amount);
 
-    // Update paper inventory if it's a paper transaction and not pending
-    // Negative quantities are allowed (for returns/corrections)
-    if (paperColor && paperQuantity !== undefined && !pending) {
+    if (transactionAffectsTrackedInventory(newTransaction)) {
       setPaperInventory((prev) => ({
         ...prev,
-        [paperColor]: (prev[paperColor] || 0) + paperQuantity,
-      }));
-    }
-  };
-
-  // Edit transaction
-  const editTransaction = (id: string, updates: Partial<Transaction>) => {
-    const transIndex = transactions.findIndex(t => t.id === id);
-    if (transIndex === -1) return;
-    
-    const oldTrans = transactions[transIndex];
-    const newTrans = { ...oldTrans, ...updates };
-    
-    // Update transactions array
-    const newTransactions = [...transactions];
-    newTransactions[transIndex] = newTrans;
-    setTransactions(newTransactions);
-    
-    // Update cash if amount changed
-    if (updates.amount !== undefined) {
-      const amountDiff = newTrans.amount - oldTrans.amount;
-      setCash((prev) => prev + amountDiff);
-    }
-    
-    // Update inventory if paper transaction changed
-    if (oldTrans.paperColor && oldTrans.paperQuantity) {
-      // Reverse old transaction
-      setPaperInventory((prev) => ({
-        ...prev,
-        [oldTrans.paperColor!]: (prev[oldTrans.paperColor!] || 0) - oldTrans.paperQuantity!,
-      }));
-    }
-    if (newTrans.paperColor && newTrans.paperQuantity) {
-      // Apply new transaction
-      setPaperInventory((prev) => ({
-        ...prev,
-        [newTrans.paperColor!]: (prev[newTrans.paperColor!] || 0) + newTrans.paperQuantity!,
+        [paperColor!]: (prev[paperColor!] || 0) + (paperQuantity || 0),
       }));
     }
   };
@@ -1432,6 +1559,7 @@ function App() {
   const deleteTransaction = (id: string) => {
     const trans = transactions.find(t => t.id === id);
     if (!trans) return;
+    if (!isManualTransaction(trans)) return;
     
     // Remove from transactions
     setTransactions(transactions.filter(t => t.id !== id));
@@ -1439,11 +1567,10 @@ function App() {
     // Reverse the cash effect
     setCash((prev) => prev - trans.amount);
     
-    // Reverse inventory effect if it's a paper transaction (and not pending)
-    if (trans.paperColor && trans.paperQuantity && !trans.pending) {
+    if (transactionAffectsTrackedInventory(trans)) {
       setPaperInventory((prev) => ({
         ...prev,
-        [trans.paperColor!]: (prev[trans.paperColor!] || 0) - trans.paperQuantity!,
+        [trans.paperColor!]: (prev[trans.paperColor!] || 0) - (trans.paperQuantity || 0),
       }));
     }
   };
@@ -1501,8 +1628,7 @@ function App() {
     newTransactions[transIndex] = updatedTrans;
     setTransactions(newTransactions);
     
-    // Now add to inventory
-    if (trans.paperColor && trans.paperQuantity !== undefined) {
+    if (transactionAffectsTrackedInventory(updatedTrans)) {
       setPaperInventory((prev) => {
         const nextInventory = {
           ...prev,
@@ -1547,26 +1673,53 @@ function App() {
         currentView === "station3" ? "bg-purple-900" :
         "bg-gray-900"
       }`}>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 xl:grid-cols-5">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Cash:</span>
+              <span className="text-xs text-gray-400">Revenue:</span>
               <span className="text-sm font-bold text-green-400">
-                £{cash.toFixed(2)}
+                {formatCurrency(financialMetrics.revenue)}
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Net Worth:</span>
-              <span className="text-sm font-bold text-blue-400">
-                £{gameState.calculateNetWorth().toFixed(2)}
+              <span className="text-xs text-gray-400">Cost of Sales:</span>
+              <span className="text-sm font-bold text-amber-300">
+                {formatCurrency(financialMetrics.costOfSales)}
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Profit:</span>
+              <span className="text-xs text-gray-400">Gross Profit:</span>
               <span
-                className={`text-sm font-bold ${gameState.calculateProfit() >= 0 ? "text-green-400" : "text-red-400"}`}
+                className={`text-sm font-bold ${
+                  financialMetrics.grossProfit >= 0 ? "text-blue-300" : "text-red-400"
+                }`}
               >
-                £{gameState.calculateProfit().toFixed(2)}
+                {formatCurrency(financialMetrics.grossProfit)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">Operating Expenses:</span>
+              <span className="text-sm font-bold text-orange-300">
+                {formatCurrency(financialMetrics.operatingExpenses)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">Net Profit:</span>
+              <span
+                className={`text-sm font-bold ${
+                  financialMetrics.netProfit >= 0 ? "text-green-300" : "text-red-400"
+                }`}
+              >
+                {formatCurrency(financialMetrics.netProfit)}
+              </span>
+            </div>
+            <div className="col-span-2 flex items-center gap-2 xl:col-span-5">
+              <span className="text-xs text-gray-400">Cash / Inventory:</span>
+              <span className="text-xs text-gray-200">
+                Cash {formatCurrency(financialMetrics.cash)} | Tracked{" "}
+                {formatCurrency(financialMetrics.trackedInventoryValue)} |
+                Other {formatCurrency(financialMetrics.otherInventoryValue)} |
+                Total {formatCurrency(financialMetrics.totalInventoryValue)}
               </span>
             </div>
           </div>
@@ -2355,7 +2508,7 @@ function App() {
           <h2 className="text-base font-bold text-gray-800 mb-2">
             Inventory Management System
           </h2>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 gap-2 xl:grid-cols-3">
             <div className="bg-gray-50 rounded p-2">
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
                 Tracked Inventory
@@ -2365,6 +2518,7 @@ function App() {
                   <tr>
                     <th className="px-1 py-0.5 text-left">Item</th>
                     <th className="px-1 py-0.5 text-right">Quantity</th>
+                    <th className="px-1 py-0.5 text-right">Value</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2386,6 +2540,9 @@ function App() {
                       <td className="px-1 py-0.5 text-right font-mono">
                         {quantity}
                       </td>
+                      <td className="px-1 py-0.5 text-right font-mono">
+                        {formatCurrency(quantity * getColorPrice(color))}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2398,112 +2555,86 @@ function App() {
                         0,
                       )}
                     </td>
+                    <td className="px-1 py-0.5 text-right font-mono">
+                      {formatCurrency(financialMetrics.trackedInventoryValue)}
+                    </td>
                   </tr>
                 </tfoot>
               </table>
+              <div className="mt-2 rounded bg-white p-2 text-xs text-gray-600">
+                <div className="flex items-center justify-between">
+                  <span>Other inventory value</span>
+                  <span className="font-mono text-gray-800">
+                    {formatCurrency(financialMetrics.otherInventoryValue)}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between font-semibold text-gray-800">
+                  <span>Total inventory value</span>
+                  <span className="font-mono">
+                    {formatCurrency(financialMetrics.totalInventoryValue)}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="bg-gray-50 rounded p-2">
+            <div className="bg-gray-50 rounded p-2 xl:col-span-2">
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
-                Cash Transactions Ledger
+                Transactions Ledger
               </h3>
+              <div className="mb-2 text-[11px] text-gray-500">
+                Every transaction is kept in the ledger, exported, and used for the
+                financial history below.
+              </div>
               <div className="mb-2">
                 <table className="w-full text-xs">
-                  <thead className="bg-gray-200 sticky top-0">
+                  <thead className="bg-gray-200">
                     <tr>
-                      <th className="px-1 py-0.5 text-left">Revenue</th>
-                      <th className="px-1 py-0.5 text-left">Type</th>
-                      <th className="px-1 py-0.5 text-left">Reason</th>
+                      <th className="px-1 py-0.5 text-left">Time</th>
+                      <th className="px-1 py-0.5 text-left">Amount</th>
+                      <th className="px-1 py-0.5 text-left">Category</th>
+                      <th className="px-1 py-0.5 text-left">Details</th>
                       <th className="px-1 py-0.5 text-left">Status</th>
                       <th className="px-1 py-0.5 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {transactions
-                      .slice(-10)
-                      .reverse()
-                      .map((trans) => (
+                    {transactionsDescending.map((trans) => {
+                      const metadata = resolveTransactionMetadata(trans);
+
+                      return (
                         <tr
                           key={`${trans.id}-${trans.arrivalTime ?? trans.timestamp.toISOString()}-${trans.reason ?? ""}`}
                           className="border-b"
                         >
-                          <td
-                            className={`px-1 py-0.5 font-mono ${trans.amount >= 0 ? "text-green-600" : "text-red-600"}`}
-                          >
-                            {editingTransactionId === trans.id ? (
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={trans.amount}
-                                onChange={(e) => editTransaction(trans.id, { amount: parseFloat(e.target.value) || 0 })}
-                                className="w-20 px-1 border rounded text-xs"
-                              />
-                            ) : (
-                              <span onClick={() => setEditingTransactionId(trans.id)} className="cursor-pointer">
-                                £{trans.amount.toFixed(2)}
-                              </span>
-                            )}
+                          <td className="px-1 py-0.5 font-mono text-[11px] text-gray-500">
+                            {formatLedgerTime(trans.timestamp)}
                           </td>
-                          <td className="px-1 py-0.5">
-                            {trans.type === "paper" && trans.paperColor ? (
-                              editingTransactionId === trans.id ? (
-                                <div className="flex gap-1">
-                                  <select
-                                    value={trans.paperColor}
-                                    onChange={(e) => editTransaction(trans.id, { paperColor: e.target.value })}
-                                    className="w-12 px-1 border rounded text-xs"
-                                  >
-                                    {PAPER_COLORS.map(color => (
-                                      <option key={color.code} value={color.code}>{color.code}</option>
-                                    ))}
-                                    <option value={ENVELOPE_CODE}>{ENVELOPE_CODE}</option>
-                                  </select>
-                                  <input
-                                    type="number"
-                                    value={trans.paperQuantity || 0}
-                                    onChange={(e) => editTransaction(trans.id, { paperQuantity: parseInt(e.target.value) || 0 })}
-                                    className="w-12 px-1 border rounded text-xs"
-                                  />
-                                </div>
-                              ) : (
-                                <span onClick={() => setEditingTransactionId(trans.id)} className="cursor-pointer">
-                                  {getColorName(trans.paperColor)}:{trans.paperQuantity}
-                                </span>
-                              )
-                            ) : editingTransactionId === trans.id ? (
-                              <select
-                                value={trans.type}
-                                onChange={(e) => editTransaction(trans.id, { 
-                                  type: e.target.value as "cash" | "paper" | "inventory",
-                                  paperColor: e.target.value === "paper" ? trans.paperColor : undefined,
-                                  paperQuantity: e.target.value === "paper" ? trans.paperQuantity : undefined
-                                })}
-                                className="w-20 px-1 border rounded text-xs"
-                              >
-                                <option value="cash">Cash</option>
-                                <option value="inventory">Inventory</option>
-                                <option value="paper">Paper</option>
-                              </select>
-                            ) : (
-                              <span 
-                                onClick={() => setEditingTransactionId(trans.id)} 
-                                className="cursor-pointer"
-                              >
-                                {trans.type === "inventory" ? "Inventory" : trans.type === "paper" ? "Paper" : "Cash"}
-                              </span>
-                            )}
+                          <td
+                            className={`px-1 py-0.5 font-mono ${
+                              trans.amount > 0
+                                ? "text-green-600"
+                                : trans.amount < 0
+                                  ? "text-red-600"
+                                  : "text-gray-500"
+                            }`}
+                          >
+                            {formatCurrency(trans.amount)}
+                          </td>
+                          <td className="px-1 py-0.5 text-[11px]">
+                            <div className="font-medium text-gray-800">
+                              {getTransactionCategoryLabel(trans)}
+                            </div>
+                            <div className="text-gray-500">
+                              {metadata.financeBucket === "neutral"
+                                ? "No direct metric impact"
+                                : metadata.financeBucket.replace(/_/g, " ")}
+                            </div>
                           </td>
                           <td className="px-1 py-0.5 text-xs">
-                            {editingTransactionId === trans.id ? (
-                              <input
-                                type="text"
-                                value={trans.reason || ""}
-                                onChange={(e) => editTransaction(trans.id, { reason: e.target.value })}
-                                className="w-full px-1 border rounded text-xs"
-                              />
-                            ) : (
-                              <span onClick={() => setEditingTransactionId(trans.id)} className="cursor-pointer">
-                                {trans.reason || ""}
-                              </span>
+                            <div className="text-gray-800">{trans.reason || ""}</div>
+                            {trans.paperColor && trans.paperQuantity !== undefined && (
+                              <div className="text-[11px] text-gray-500">
+                                {getColorName(trans.paperColor)} {trans.paperQuantity}
+                              </div>
                             )}
                           </td>
                           <td className="px-1 py-0.5 text-xs">
@@ -2512,47 +2643,41 @@ function App() {
                                 onClick={() => completePendingTransaction(trans.id)}
                                 className="cursor-pointer text-yellow-600 hover:text-yellow-800"
                               >
-                                {trans.arrivalTime ? (
-                                  <>
-                                    Pending ({Math.max(0, Math.ceil((trans.arrivalTime - currentTime) / 1000))}s)
-                                  </>
-                                ) : "Pending"}
+                                {getTransactionStatusLabel(trans, currentTime)}
                               </span>
                             ) : (
-                              <span className="text-green-600">✓</span>
+                              <span className="text-green-600">
+                                {getTransactionStatusLabel(trans, currentTime)}
+                              </span>
                             )}
                           </td>
                           <td className="px-1 py-0.5 text-center">
-                            {editingTransactionId === trans.id ? (
-                              <button
-                                onClick={() => setEditingTransactionId(null)}
-                                className="px-1 py-0.5 bg-green-500 text-white rounded text-xs"
-                              >
-                                ✓
-                              </button>
-                            ) : (
+                            {isManualTransaction(trans) ? (
                               <button
                                 onClick={() => deleteTransaction(trans.id)}
                                 className="px-1 py-0.5 text-gray-500 hover:text-gray-700 text-xs"
                               >
                                 ×
                               </button>
+                            ) : (
+                              <span className="text-gray-300">-</span>
                             )}
                           </td>
                         </tr>
-                      ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               {/* Add Transaction Forms */}
-              <div className="space-y-1">
-                <div className="flex gap-1">
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-1">
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="Revenue"
-                    className="flex-1 px-1 py-0.5 border rounded text-xs"
+                    placeholder="Amount / cost"
+                    className="w-28 px-1 py-0.5 border rounded text-xs"
                     id="cashAmount"
                   />
                   <input
@@ -2561,17 +2686,19 @@ function App() {
                     className="flex-1 px-1 py-0.5 border rounded text-xs"
                     id="cashReason"
                   />
-                  <label className="flex items-center gap-1 text-xs">
-                    <input
-                      type="checkbox"
-                      id="affectsInventory"
-                      className="rounded"
-                    />
-                    <span>Inventory</span>
-                  </label>
+                  <select
+                    id="manualEntryKind"
+                    className="px-1 py-0.5 border rounded text-xs"
+                    defaultValue="manual_cash"
+                  >
+                    <option value="manual_cash">Manual cash</option>
+                    <option value="operating_expense">Operating expense</option>
+                    <option value="inventory_purchase">Other inventory</option>
+                    <option value="starting_inventory">Starting inventory</option>
+                  </select>
                   <button
                     onClick={() => {
-                      const amount = parseFloat(
+                      const rawAmount = parseFloat(
                         (
                           document.getElementById(
                             "cashAmount",
@@ -2583,17 +2710,64 @@ function App() {
                           document.getElementById(
                             "cashReason",
                           ) as HTMLInputElement
-                        ).value || "Cash transaction";
-                      const isInventory = (
+                        ).value || "Manual transaction";
+                      const entryKind = (
                         document.getElementById(
-                          "affectsInventory",
-                        ) as HTMLInputElement
-                      ).checked;
-                      if (amount) {
+                          "manualEntryKind",
+                        ) as HTMLSelectElement
+                      ).value as
+                        | "manual_cash"
+                        | "operating_expense"
+                        | "inventory_purchase"
+                        | "starting_inventory";
+                      if (rawAmount) {
+                        let amount = rawAmount;
+                        let type: "cash" | "paper" | "inventory" = "cash";
+                        let metadata: TransactionMetadata = {
+                          category: "manual_cash",
+                          financeBucket: "neutral",
+                          metricContribution: 0,
+                          inventoryValueDelta: 0,
+                        };
+
+                        if (entryKind === "operating_expense") {
+                          amount = -Math.abs(rawAmount);
+                          metadata = {
+                            category: "operating_expense",
+                            financeBucket: "operating_expense",
+                            metricContribution: Math.abs(rawAmount),
+                            inventoryValueDelta: 0,
+                          };
+                        } else if (entryKind === "inventory_purchase") {
+                          amount = -Math.abs(rawAmount);
+                          type = "inventory";
+                          metadata = {
+                            category: "inventory_purchase",
+                            financeBucket: "cost_of_sales",
+                            metricContribution: Math.abs(rawAmount),
+                            inventoryValueDelta: Math.abs(rawAmount),
+                          };
+                        } else if (entryKind === "starting_inventory") {
+                          amount = 0;
+                          type = "inventory";
+                          metadata = {
+                            category: "starting_inventory",
+                            financeBucket: "operating_expense",
+                            metricContribution: Math.abs(rawAmount) * 0.7,
+                            inventoryValueDelta: Math.abs(rawAmount),
+                          };
+                        }
+
                         addTransaction(
                           amount,
                           reason,
-                          isInventory ? "inventory" : "cash",
+                          type,
+                          undefined,
+                          undefined,
+                          undefined,
+                          false,
+                          undefined,
+                          metadata,
                         );
                         (
                           document.getElementById(
@@ -2607,15 +2781,19 @@ function App() {
                         ).value = "";
                         (
                           document.getElementById(
-                            "affectsInventory",
-                          ) as HTMLInputElement
-                        ).checked = false;
+                            "manualEntryKind",
+                          ) as HTMLSelectElement
+                        ).value = "manual_cash";
                       }
                     }}
                     className="px-2 py-0.5 bg-blue-600 text-white rounded text-xs"
                   >
-                    Add Cash
+                    Add Entry
                   </button>
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  Starting inventory keeps cash unchanged, adds inventory value, and
+                  books 70% of the entered cost as an operating expense.
                 </div>
 
                 <div className="flex flex-wrap gap-1">
@@ -2731,8 +2909,22 @@ function App() {
                       
                       const deliveryMs = paperDeliverySeconds * 1000;
 
-                      // Create pending transaction for tracked stock purchases
-                      addTransaction(cost, reason, "paper", itemMatch.code, qty, undefined, true, deliveryMs);
+                      addTransaction(
+                        cost,
+                        reason,
+                        "paper",
+                        itemMatch.code,
+                        qty,
+                        undefined,
+                        true,
+                        deliveryMs,
+                        {
+                          category: "paper_purchase",
+                          financeBucket: "cost_of_sales",
+                          metricContribution: Math.abs(cost),
+                          inventoryValueDelta: 0,
+                        },
+                      );
                       gameState.startBuyingCooldown(buyingCooldown);
 
                       // Clear form
@@ -3086,7 +3278,45 @@ function App() {
                     Clear Cooldown
                   </button>
                 </div>
-                <div className="text-gray-500">Reminder: add charts if possible.</div>
+                <div className="text-gray-500">
+                  Financial history is built directly from the full transactions ledger.
+                </div>
+              </div>
+
+              <div className="mt-3 rounded border border-gray-200 bg-white p-3">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800">
+                      Financial History
+                    </h3>
+                    <div className="text-[11px] text-gray-500">
+                      Cash, revenue, and net profit over every recorded transaction.
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-gray-500">
+                    Latest net profit {formatCurrency(financialMetrics.netProfit)}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+                  <SimpleLineChart
+                    title="Cash"
+                    colorClass="text-cyan-600"
+                    points={financialHistory}
+                    valueSelector={(point) => point.cash}
+                  />
+                  <SimpleLineChart
+                    title="Revenue"
+                    colorClass="text-green-600"
+                    points={financialHistory}
+                    valueSelector={(point) => point.revenue}
+                  />
+                  <SimpleLineChart
+                    title="Net Profit"
+                    colorClass="text-blue-600"
+                    points={financialHistory}
+                    valueSelector={(point) => point.netProfit}
+                  />
+                </div>
               </div>
 
 	              <div className="mt-3 flex justify-end">
@@ -3213,7 +3443,7 @@ function App() {
       )}
 
       {/* Scheduler Suggestions - Moved to bottom */}
-      {view === "operations" && (
+      {currentView === "operations" && (
         <div className="bg-white border-t border-gray-300">
           <div className="p-2">
             <h3 className="text-xs font-semibold text-gray-700 mb-2">
@@ -3370,26 +3600,11 @@ function App() {
               )}
             </div>
 
-            {/* Accept Button */}
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={acceptAndOrderSuggestedPlan}
-                disabled={suggestedPlanActionDisabled}
-                className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs font-medium"
-              >
-                {currentScheduleMatchesSuggestion
-                  ? "Current Schedule Already Best"
-                  : suggestedPlanNeedsPaperOrder &&
-                      buyingCooldownRemainingSeconds > 0
-                    ? `Cooldown ${formatTime(buyingCooldownRemainingSeconds)}`
-                    : "Accept and Order"}
-              </button>
-            </div>
           </div>
         </div>
       )}
 
-      {/* New Color Creation Dialog - Always rendered regardless of view */
+      {/* New Color Creation Dialog - Always rendered regardless of view */}
       {showNewColorDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-4 max-w-md w-full">

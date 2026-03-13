@@ -179,6 +179,19 @@ export function buildSnapshotCsvExports(
     { header: "pending", getValue: (transaction) => transaction.pending },
     { header: "deliveryTime", getValue: (transaction) => transaction.deliveryTime },
     { header: "arrivalTime", getValue: (transaction) => transaction.arrivalTime },
+    { header: "category", getValue: (transaction) => transaction.category },
+    {
+      header: "financeBucket",
+      getValue: (transaction) => transaction.financeBucket,
+    },
+    {
+      header: "metricContribution",
+      getValue: (transaction) => transaction.metricContribution,
+    },
+    {
+      header: "inventoryValueDelta",
+      getValue: (transaction) => transaction.inventoryValueDelta,
+    },
   ]);
 
   const summaryRows: Array<{ section: string; key: string; value: CsvValue }> = [

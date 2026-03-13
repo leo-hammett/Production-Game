@@ -11,7 +11,7 @@ import { Schedule } from "./strategyPlanner";
 
 export const DEFAULT_TEAM_ID = "TEAM-001";
 export const TEAM_ID_STORAGE_KEY = "production-game/team-id";
-export const SHARED_GAME_SCHEMA_VERSION = 1;
+export const SHARED_GAME_SCHEMA_VERSION = 2;
 
 const DEFAULT_OCCASIONS = [
         "Christmas",
@@ -101,6 +101,10 @@ export interface SerializableTransaction {
   pending?: boolean;
   deliveryTime?: number;
   arrivalTime?: number;
+  category?: Transaction["category"];
+  financeBucket?: Transaction["financeBucket"];
+  metricContribution?: number;
+  inventoryValueDelta?: number;
 }
 
 export interface SharedGameSnapshot {
@@ -328,6 +332,10 @@ function serializeTransaction(
     pending: transaction.pending,
     deliveryTime: transaction.deliveryTime,
     arrivalTime: transaction.arrivalTime,
+    category: transaction.category,
+    financeBucket: transaction.financeBucket,
+    metricContribution: transaction.metricContribution,
+    inventoryValueDelta: transaction.inventoryValueDelta,
   };
 }
 
@@ -346,5 +354,9 @@ function deserializeTransaction(
     pending: transaction.pending,
     deliveryTime: transaction.deliveryTime,
     arrivalTime: transaction.arrivalTime,
+    category: transaction.category,
+    financeBucket: transaction.financeBucket,
+    metricContribution: transaction.metricContribution,
+    inventoryValueDelta: transaction.inventoryValueDelta,
   };
 }

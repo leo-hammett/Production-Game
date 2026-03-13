@@ -77,6 +77,62 @@ export function allocatePaperForOrderIfNeeded(
   };
 }
 
+export function releasePaperAllocationForOrder(
+  order: Order,
+  paperInventory: PaperInventory,
+): { order: Order; paperInventory: PaperInventory; releasedNow: boolean } {
+  if (!order.paperAllocated) {
+    return {
+      order,
+      paperInventory,
+      releasedNow: false,
+    };
+  }
+
+  const requirements = getOrderInventoryRequirements(order);
+  const nextInventory = { ...paperInventory };
+  Object.entries(requirements).forEach(([itemCode, quantity]) => {
+    nextInventory[itemCode] = (nextInventory[itemCode] || 0) + quantity;
+  });
+
+  return {
+    order: {
+      ...order,
+      paperAllocated: false,
+    },
+    paperInventory: nextInventory,
+    releasedNow: true,
+  };
+}
+
+export function createOrderAllocationTransactions(
+  order: Order,
+  category: "inventory_allocation" | "inventory_return",
+): Transaction[] {
+  const quantityMultiplier = category === "inventory_allocation" ? -1 : 1;
+  const actionLabel = category === "inventory_allocation" ? "Allocated" : "Returned";
+
+  return Object.entries(getOrderInventoryRequirements(order)).map(
+    ([itemCode, quantity]) =>
+      gameState.createTransaction(
+        0,
+        `${actionLabel} ${quantity} ${gameState.getColorName(itemCode)} for order ${order.id}`,
+        "paper",
+        itemCode,
+        quantity * quantityMultiplier,
+        order.id,
+        false,
+        undefined,
+        {
+          category,
+          financeBucket: "neutral",
+          metricContribution: 0,
+          inventoryValueDelta: 0,
+        },
+      ),
+  );
+}
+
 // Order constants
 export const OCCASIONS = [
   "Christmas",
@@ -261,6 +317,13 @@ export const updateOrder = (
 ) => {
   const order = orders.find(o => o.id === id);
   if (!order) return orders;
+  const appendTransactions = (newTransactions: Transaction[]) => {
+    if (!newTransactions.length) {
+      return;
+    }
+
+    setTransactions(prev => [...prev, ...newTransactions]);
+  };
 
   // Handle status changes that affect cash
   if (field === "status") {
@@ -275,15 +338,23 @@ export const updateOrder = (
     
     // If changing to failed status, add a fine transaction
     if (newStatus === "failed" && oldStatus !== "failed") {
-      const fineTransaction: Transaction = {
-        id: `fine-${order.id}-${Date.now()}`,
-        timestamp: new Date(),
-        amount: -failureFine,
-        type: "cash",
-        reason: `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total plus materials): ${order.quantity}x ${order.occasion || 'cards'}`,
-        orderId: order.id,
-      };
-      setTransactions(prev => [...prev, fineTransaction]);
+      const fineTransaction = gameState.createTransaction(
+        -failureFine,
+        `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total plus materials): ${order.quantity}x ${order.occasion || 'cards'}`,
+        "cash",
+        undefined,
+        undefined,
+        order.id,
+        false,
+        undefined,
+        {
+          category: "fine",
+          financeBucket: "operating_expense",
+          metricContribution: failureFine,
+          inventoryValueDelta: 0,
+        },
+      );
+      appendTransactions([fineTransaction]);
       setCash(prev => prev - failureFine);
     }
     
@@ -292,30 +363,47 @@ export const updateOrder = (
       // Find and reverse the fine transaction
       const fineTransaction = transactions.find(t => t.orderId === order.id && t.amount < 0 && t.reason?.includes('failure fine'));
       if (fineTransaction) {
-        const refundTransaction: Transaction = {
-          id: `refund-${order.id}-${Date.now()}`,
-          timestamp: new Date(),
-          amount: Math.abs(fineTransaction.amount),
-          type: "cash",
-          reason: `Order failure fine reversed: ${order.quantity}x ${order.occasion || 'cards'}`,
-          orderId: order.id,
-        };
-        setTransactions(prev => [...prev, refundTransaction]);
+        const refundAmount = Math.abs(fineTransaction.amount);
+        const refundTransaction = gameState.createTransaction(
+          refundAmount,
+          `Order failure fine reversed: ${order.quantity}x ${order.occasion || 'cards'}`,
+          "cash",
+          undefined,
+          undefined,
+          order.id,
+          false,
+          undefined,
+          {
+            category: "fine",
+            financeBucket: "operating_expense",
+            metricContribution: -refundAmount,
+            inventoryValueDelta: 0,
+          },
+        );
+        appendTransactions([refundTransaction]);
         setCash(prev => prev + Math.abs(fineTransaction.amount));
       }
     }
     
     // If changing to approved status, collect payment
     if (newStatus === "approved" && oldStatus !== "approved") {
-      const paymentTransaction: Transaction = {
-        id: `payment-${order.id}-${Date.now()}`,
-        timestamp: new Date(),
-        amount: orderRevenue,
-        type: "cash",
-        reason: `Order payment received: ${order.quantity}x ${order.occasion || 'cards'} for £${orderRevenue.toFixed(2)} total`,
-        orderId: order.id,
-      };
-      setTransactions(prev => [...prev, paymentTransaction]);
+      const paymentTransaction = gameState.createTransaction(
+        orderRevenue,
+        `Order payment received: ${order.quantity}x ${order.occasion || 'cards'} for £${orderRevenue.toFixed(2)} total`,
+        "cash",
+        undefined,
+        undefined,
+        order.id,
+        false,
+        undefined,
+        {
+          category: "order_income",
+          financeBucket: "revenue",
+          metricContribution: orderRevenue,
+          inventoryValueDelta: 0,
+        },
+      );
+      appendTransactions([paymentTransaction]);
       setCash(prev => prev + orderRevenue);
     }
     
@@ -324,15 +412,24 @@ export const updateOrder = (
       // Find and reverse the payment transaction
       const paymentTransaction = transactions.find(t => t.orderId === order.id && t.amount > 0 && t.reason?.includes('payment received'));
       if (paymentTransaction) {
-        const reversalTransaction: Transaction = {
-          id: `reversal-${order.id}-${Date.now()}`,
-          timestamp: new Date(),
-          amount: -paymentTransaction.amount,
-          type: "cash",
-          reason: `Order payment reversed: ${order.quantity}x ${order.occasion || 'cards'}`,
-          orderId: order.id,
-        };
-        setTransactions(prev => [...prev, reversalTransaction]);
+        const reversalAmount = paymentTransaction.amount;
+        const reversalTransaction = gameState.createTransaction(
+          -reversalAmount,
+          `Order payment reversed: ${order.quantity}x ${order.occasion || 'cards'}`,
+          "cash",
+          undefined,
+          undefined,
+          order.id,
+          false,
+          undefined,
+          {
+            category: "order_income",
+            financeBucket: "revenue",
+            metricContribution: -reversalAmount,
+            inventoryValueDelta: 0,
+          },
+        );
+        appendTransactions([reversalTransaction]);
         setCash(prev => prev - paymentTransaction.amount);
       }
     }
@@ -348,15 +445,46 @@ export const updateOrder = (
       ...order,
       status: nextStatus,
     };
+    let nextInventory = paperInventory;
+    let nextOrder = updatedOrder;
+    const lifecycleTransactions: Transaction[] = [];
+
+    if (
+      order.paperAllocated &&
+      PAPER_CONSUMING_STATUSES.has(order.status) &&
+      !PAPER_CONSUMING_STATUSES.has(nextStatus)
+    ) {
+      const releaseResult = releasePaperAllocationForOrder(order, nextInventory);
+      nextInventory = releaseResult.paperInventory;
+      nextOrder = releaseResult.order;
+      if (releaseResult.releasedNow) {
+        lifecycleTransactions.push(
+          ...createOrderAllocationTransactions(order, "inventory_return"),
+        );
+      }
+    }
 
     const allocationResult = allocatePaperForOrderIfNeeded(
-      updatedOrder,
+      nextOrder,
       nextStatus,
-      paperInventory,
+      nextInventory,
     );
-    const nextOrder = allocationResult.order;
+    nextOrder = allocationResult.order;
+    nextInventory = allocationResult.paperInventory;
     if (allocationResult.allocatedNow) {
-      setPaperInventory(allocationResult.paperInventory);
+      lifecycleTransactions.push(
+        ...createOrderAllocationTransactions(nextOrder, "inventory_allocation"),
+      );
+    }
+
+    if (
+      lifecycleTransactions.length ||
+      nextInventory !== paperInventory
+    ) {
+      setPaperInventory(nextInventory);
+    }
+    if (lifecycleTransactions.length) {
+      appendTransactions(lifecycleTransactions);
     }
 
     if (nextStatus === "pending_inventory") {

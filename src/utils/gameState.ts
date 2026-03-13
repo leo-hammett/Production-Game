@@ -58,6 +58,30 @@ export const ENVELOPE_ITEM = new PaperColor(
   ENVELOPE_PRICE,
 );
 
+export type TransactionCategory =
+  | "manual_cash"
+  | "order_income"
+  | "paper_purchase"
+  | "inventory_purchase"
+  | "inventory_allocation"
+  | "inventory_return"
+  | "fine"
+  | "starting_inventory"
+  | "operating_expense";
+
+export type TransactionFinanceBucket =
+  | "revenue"
+  | "cost_of_sales"
+  | "operating_expense"
+  | "neutral";
+
+export interface TransactionMetadata {
+  category?: TransactionCategory;
+  financeBucket?: TransactionFinanceBucket;
+  metricContribution?: number;
+  inventoryValueDelta?: number;
+}
+
 export interface Transaction {
   id: string;
   timestamp: Date;
@@ -70,6 +94,10 @@ export interface Transaction {
   pending?: boolean; // For inventory transactions that haven't arrived yet
   deliveryTime?: number; // Expected delivery time in milliseconds
   arrivalTime?: number; // When the item should arrive (timestamp + deliveryTime)
+  category?: TransactionCategory;
+  financeBucket?: TransactionFinanceBucket;
+  metricContribution?: number;
+  inventoryValueDelta?: number;
 }
 
 // Order-related types (moved from orders.ts to avoid circular dependency)
@@ -583,6 +611,7 @@ class GameStateManager {
     orderId?: string,
     pending?: boolean,
     deliveryTime?: number,
+    metadata?: TransactionMetadata,
   ): Transaction {
     const now = Date.now();
     return {
@@ -597,6 +626,10 @@ class GameStateManager {
       pending,
       deliveryTime,
       arrivalTime: pending && deliveryTime ? now + deliveryTime : undefined,
+      category: metadata?.category,
+      financeBucket: metadata?.financeBucket,
+      metricContribution: metadata?.metricContribution,
+      inventoryValueDelta: metadata?.inventoryValueDelta,
     };
   }
 

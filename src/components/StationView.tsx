@@ -134,17 +134,46 @@ export function StationView({
   );
   const [leftPaneWidth, setLeftPaneWidth] = useState(70);
   const [isDragging, setIsDragging] = useState(false);
+  const [groupOrders, setGroupOrders] = useState(true);
   const dividerRef = useRef<HTMLDivElement>(null);
 
   const scheduledOrders = getScheduledProductionOrders(orders, scheduleOrderIds);
-  const stationQueue = scheduledOrders.filter(
+  
+  // All available orders (no progress filtering)
+  const allAvailableOrders = scheduledOrders.filter(
     (order) =>
-      order.progress === requiredProgress &&
       order.status !== "pending_inventory" &&
       order.status !== "sent" &&
       order.status !== "approved" &&
       order.status !== "failed",
   );
+
+  // Categorize orders for grouped view
+  const todoOrders = allAvailableOrders.filter(order => 
+    order.progress === requiredProgress && 
+    !getOrderStationTask(order, stationIndex)?.startedAt
+  );
+  
+  const pendingOrders = allAvailableOrders.filter(order => 
+    order.progress < requiredProgress
+  );
+  
+  const completedOrders = allAvailableOrders.filter(order => 
+    getOrderStationTask(order, stationIndex)?.completedAt
+  );
+
+  // Choose display based on toggle
+  const stationQueue = groupOrders 
+    ? [...todoOrders, ...pendingOrders, ...completedOrders]
+    : allAvailableOrders.sort((a, b) => {
+        // Sort by schedule priority if available
+        const aIndex = scheduleOrderIds.indexOf(a.id);
+        const bIndex = scheduleOrderIds.indexOf(b.id);
+        if (aIndex === -1 && bIndex === -1) return 0;
+        if (aIndex === -1) return 1;
+        if (bIndex === -1) return -1;
+        return aIndex - bIndex;
+      });
   const stationSchedule = calculateStationSchedule(
     orders,
     scheduleOrderIds,
@@ -607,37 +636,149 @@ export function StationView({
           </div>
 
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">Job Queue</h3>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-gray-700">Job Queue</h3>
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={groupOrders}
+                  onChange={(e) => setGroupOrders(e.target.checked)}
+                  className="w-3 h-3"
+                />
+                Group Orders
+              </label>
+            </div>
             <div className="bg-gray-50 rounded p-3">
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {stationQueue.slice(0, 5).map((order, index) => (
-                  <div
-                    key={order.id}
-                    onClick={() => setCurrentOrderId(order.id)}
-                    className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
-                      resolvedCurrentOrderId === order.id
-                        ? "border-blue-500 ring-1 ring-blue-300"
-                        : ""
-                    }`}
-                  >
-                    <div className="flex-1">
-                      <div className="text-sm font-medium">
-                        Order #{order.id.slice(-6)}
+              <div className="space-y-2">
+                {groupOrders ? (
+                  // Grouped view with categories
+                  <>
+                    {todoOrders.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold text-gray-600 mb-1 px-1">TODO</div>
+                        {todoOrders.slice(0, 5).map((order, index) => (
+                          <div
+                            key={order.id}
+                            onClick={() => setCurrentOrderId(order.id)}
+                            className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
+                              resolvedCurrentOrderId === order.id
+                                ? "border-blue-500 ring-1 ring-blue-300"
+                                : ""
+                            }`}
+                          >
+                            <div className="flex-1">
+                              <div className="text-sm font-medium">
+                                Order #{order.id.slice(-6)}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {order.quantity}x {order.size} - {order.occasion}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-gray-500">Ready</div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <div className="text-xs text-gray-500">
-                        {order.quantity}x {order.size} - {order.occasion}
+                    )}
+                    
+                    {pendingOrders.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold text-gray-600 mb-1 px-1">PENDING</div>
+                        {pendingOrders.slice(0, 5).map((order, index) => (
+                          <div
+                            key={order.id}
+                            onClick={() => setCurrentOrderId(order.id)}
+                            className={`flex justify-between items-center p-2 bg-amber-50 rounded border hover:border-blue-400 cursor-pointer ${
+                              resolvedCurrentOrderId === order.id
+                                ? "border-blue-500 ring-1 ring-blue-300"
+                                : ""
+                            }`}
+                          >
+                            <div className="flex-1">
+                              <div className="text-sm font-medium">
+                                Order #{order.id.slice(-6)}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {order.quantity}x {order.size} - {order.occasion}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-gray-500">Waiting</div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-gray-500">Priority</div>
-                      <div className="text-sm font-medium">{index + 1}</div>
-                    </div>
-                  </div>
-                ))}
-                {stationQueue.length === 0 && (
-                  <div className="text-sm text-gray-500 text-center py-4">
-                    No jobs in queue
-                  </div>
+                    )}
+                    
+                    {completedOrders.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold text-gray-600 mb-1 px-1">COMPLETED</div>
+                        {completedOrders.slice(0, 5).map((order, index) => (
+                          <div
+                            key={order.id}
+                            onClick={() => setCurrentOrderId(order.id)}
+                            className={`flex justify-between items-center p-2 bg-green-50 rounded border hover:border-blue-400 cursor-pointer ${
+                              resolvedCurrentOrderId === order.id
+                                ? "border-blue-500 ring-1 ring-blue-300"
+                                : ""
+                            }`}
+                          >
+                            <div className="flex-1">
+                              <div className="text-sm font-medium">
+                                Order #{order.id.slice(-6)}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {order.quantity}x {order.size} - {order.occasion}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-gray-500">Done</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {todoOrders.length === 0 && pendingOrders.length === 0 && completedOrders.length === 0 && (
+                      <div className="text-sm text-gray-500 text-center py-4">
+                        No orders available
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // Priority view - show all orders by priority
+                  <>
+                    {stationQueue.slice(0, 10).map((order, index) => (
+                      <div
+                        key={order.id}
+                        onClick={() => setCurrentOrderId(order.id)}
+                        className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
+                          resolvedCurrentOrderId === order.id
+                            ? "border-blue-500 ring-1 ring-blue-300"
+                            : ""
+                        }`}
+                      >
+                        <div className="flex-1">
+                          <div className="text-sm font-medium">
+                            Order #{order.id.slice(-6)}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {order.quantity}x {order.size} - {order.occasion}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500">Priority</div>
+                          <div className="text-sm font-medium">{index + 1}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {stationQueue.length === 0 && (
+                      <div className="text-sm text-gray-500 text-center py-4">
+                        No jobs in queue
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
