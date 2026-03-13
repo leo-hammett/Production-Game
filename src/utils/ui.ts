@@ -1,5 +1,5 @@
 import type { Order, OrderStatus } from './gameState';
-import { PaperColor, PAPER_COLORS } from './gameState';
+import { ENVELOPE_CODE, ENVELOPE_ITEM, PaperColor, PAPER_COLORS } from './gameState';
 
 // Fuzzy search for occasions
 export const fuzzySearch = (query: string, items: string[]) => {
@@ -26,6 +26,9 @@ export const fuzzySearch = (query: string, items: string[]) => {
 export const getColorClass = (color: PaperColor | string) => {
   // Handle both PaperColor objects and string codes for backwards compatibility
   if (typeof color === 'string') {
+    if (color === ENVELOPE_CODE || color === ENVELOPE_ITEM.name) {
+      return ENVELOPE_ITEM.cssClass;
+    }
     const colorDef = PAPER_COLORS.find(
       (c) => c.code === color || c.name === color,
     );

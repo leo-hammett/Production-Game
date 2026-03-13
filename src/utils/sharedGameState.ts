@@ -1,4 +1,5 @@
 import {
+  ENVELOPE_CODE,
   PaperColor,
   gameState,
   type GameParameters,
@@ -172,6 +173,7 @@ export function createEmptySharedGameState(
       y: 0,
       b: 0,
       s: 0,
+      [ENVELOPE_CODE]: 0,
     },
     transactions: [],
     cash: 0,
@@ -221,6 +223,7 @@ export function deserializeSharedGameSnapshot(
       deserializeOrder(order, paperColorMap),
     ),
     paperInventory: {
+      [ENVELOPE_CODE]: 0,
       ...snapshot.paperInventory,
     },
     transactions: (snapshot.transactions || []).map(deserializeTransaction),

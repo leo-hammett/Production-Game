@@ -1,4 +1,10 @@
-import type { GameParameters, Order, PaperInventory } from "./gameState";
+import {
+  ENVELOPE_CODE,
+  ENVELOPE_PRICE,
+  type GameParameters,
+  type Order,
+  type PaperInventory,
+} from "./gameState";
 import { normalizeScheduleOrderIds } from "./orders";
 import type { Transaction } from "./gameState";
 import {
@@ -246,6 +252,18 @@ function buildRequiredPapers(
     }
 
     requiredPapers[colorCode].orderRequirement += order.quantity;
+
+    if (!requiredPapers[ENVELOPE_CODE]) {
+      requiredPapers[ENVELOPE_CODE] = {
+        orderRequirement: 0,
+        safetyStockGap: 0,
+        totalNeeded: 0,
+        currentInventory: paperInventory[ENVELOPE_CODE] || 0,
+        pendingDelivery: pendingDeliveriesByColor[ENVELOPE_CODE] || 0,
+      };
+    }
+
+    requiredPapers[ENVELOPE_CODE].orderRequirement += order.quantity;
   });
 
   Object.values(requiredPapers).forEach((paperRequirement) => {
@@ -327,12 +345,14 @@ export function evaluateScheduleCandidate(
       );
       const baseProfit =
         order.price -
-        order.quantity * context.calculatePaperCurrentWorth(order.paperColor);
-      const paperWorth = context.calculatePaperCurrentWorth(order.paperColor);
+        order.quantity *
+          (context.calculatePaperCurrentWorth(order.paperColor) + ENVELOPE_PRICE);
+      const materialWorth =
+        context.calculatePaperCurrentWorth(order.paperColor) + ENVELOPE_PRICE;
       const failureFine = calculateCostOfFailure(
         order,
         context.parameters.failureFineRatio,
-        paperWorth,
+        materialWorth,
       );
       const expectedValue =
         baseProfit * successProbability -

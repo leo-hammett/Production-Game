@@ -1,4 +1,9 @@
-import type { GameParameters, Order, PaperInventory } from "./gameState";
+import {
+  ENVELOPE_PRICE,
+  type GameParameters,
+  type Order,
+  type PaperInventory,
+} from "./gameState";
 import {
   buildSchedulerSuggestions,
   getCommittedOrders,
@@ -164,7 +169,9 @@ function calculateBaseProfit(
   calculatePaperCurrentWorth: ForecastingContext["calculatePaperCurrentWorth"],
 ): number {
   return (
-    order.price - order.quantity * calculatePaperCurrentWorth(order.paperColor)
+    order.price -
+    order.quantity *
+      (calculatePaperCurrentWorth(order.paperColor) + ENVELOPE_PRICE)
   );
 }
 
@@ -406,12 +413,14 @@ function settleOrderProfit(
 ): number {
   const dueTime = getDueTime(order);
   const baseProfit = calculateBaseProfit(order, calculatePaperCurrentWorth);
+  const materialWorth =
+    calculatePaperCurrentWorth(order.paperColor) + ENVELOPE_PRICE;
 
   if (completionTime <= dueTime) {
     return baseProfit;
   }
 
-  return -(order.price * failureFineRatio);
+  return -(order.price * failureFineRatio + order.quantity * materialWorth);
 }
 
 function simulateScenario(

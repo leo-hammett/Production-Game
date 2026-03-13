@@ -1,7 +1,7 @@
 // Order calculation utilities for Production Game
 
 import type { PaperInventory, Order } from "./gameState";
-import { gameState } from "./gameState";
+import { ENVELOPE_PRICE, gameState } from "./gameState";
 
 /**
  * Calculate the time required to complete a single order
@@ -56,7 +56,7 @@ export function calculateOrderRevenue(order: Order): number {
   // Calculate total paper cost based on current market value
   const paperColor = order.paperColor;
   const currentPaperWorth = gameState.calculatePaperCurrentWorth(paperColor);
-  const totalPaperWorth = order.quantity * currentPaperWorth;
+  const totalPaperWorth = order.quantity * (currentPaperWorth + ENVELOPE_PRICE);
 
   // Revenue is the order price minus the current worth of paper
   // (what we could sell the paper for right now, not what we paid)

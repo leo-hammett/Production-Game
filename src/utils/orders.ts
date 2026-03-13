@@ -5,6 +5,7 @@ import type {
   OrderStatus 
 } from './gameState';
 import { 
+  ENVELOPE_CODE,
   PAPER_COLORS, 
   PAPER_COLOR_MAP, 
   gameState,
@@ -16,6 +17,24 @@ const PAPER_CONSUMING_STATUSES = new Set<OrderStatus>([
   "approved",
   "failed",
 ]);
+
+export function getOrderInventoryRequirements(
+  order: Pick<Order, "paperColor" | "quantity">,
+): Record<string, number> {
+  return {
+    [order.paperColor.code]: order.quantity,
+    [ENVELOPE_CODE]: order.quantity,
+  };
+}
+
+export function hasInventoryForOrder(
+  order: Pick<Order, "paperColor" | "quantity">,
+  paperInventory: PaperInventory,
+): boolean {
+  return Object.entries(getOrderInventoryRequirements(order)).every(
+    ([itemCode, quantity]) => (paperInventory[itemCode] || 0) >= quantity,
+  );
+}
 
 export function allocatePaperForOrderIfNeeded(
   order: Order,
@@ -30,9 +49,12 @@ export function allocatePaperForOrderIfNeeded(
     };
   }
 
-  const colorCode = order.paperColor.code;
-  const availableQuantity = paperInventory[colorCode] || 0;
-  if (availableQuantity < order.quantity) {
+  const requirements = getOrderInventoryRequirements(order);
+  if (
+    Object.entries(requirements).some(
+      ([itemCode, quantity]) => (paperInventory[itemCode] || 0) < quantity,
+    )
+  ) {
     return {
       order,
       paperInventory,
@@ -40,15 +62,17 @@ export function allocatePaperForOrderIfNeeded(
     };
   }
 
+  const nextInventory = { ...paperInventory };
+  Object.entries(requirements).forEach(([itemCode, quantity]) => {
+    nextInventory[itemCode] = (nextInventory[itemCode] || 0) - quantity;
+  });
+
   return {
     order: {
       ...order,
       paperAllocated: true,
     },
-    paperInventory: {
-      ...paperInventory,
-      [colorCode]: availableQuantity - order.quantity,
-    },
+    paperInventory: nextInventory,
     allocatedNow: true,
   };
 }
@@ -246,8 +270,8 @@ export const updateOrder = (
     
     // `order.price` is the total order value, not a per-unit amount.
     const orderRevenue = order.price;
-    const paperWorth = gameState.calculatePaperCurrentWorth(order.paperColor);
-    const failureFine = orderRevenue * failureFineRatio + paperWorth * order.quantity;
+    const materialWorth = gameState.calculateOrderConsumableCurrentWorth(order.paperColor);
+    const failureFine = orderRevenue * failureFineRatio + materialWorth * order.quantity;
     
     // If changing to failed status, add a fine transaction
     if (newStatus === "failed" && oldStatus !== "failed") {
@@ -256,7 +280,7 @@ export const updateOrder = (
         timestamp: new Date(),
         amount: -failureFine,
         type: "cash",
-        reason: `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total plus paper): ${order.quantity}x ${order.occasion || 'cards'}`,
+        reason: `Order failure fine (${failureFineRatio * 100}% of £${orderRevenue.toFixed(2)} total plus materials): ${order.quantity}x ${order.occasion || 'cards'}`,
         orderId: order.id,
       };
       setTransactions(prev => [...prev, fineTransaction]);

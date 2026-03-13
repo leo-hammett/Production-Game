@@ -48,6 +48,16 @@ export interface PaperInventory {
   [colorCode: string]: number;
 }
 
+export const ENVELOPE_CODE = "env";
+export const ENVELOPE_NAME = "Envelope";
+export const ENVELOPE_PRICE = 10;
+export const ENVELOPE_ITEM = new PaperColor(
+  ENVELOPE_CODE,
+  ENVELOPE_NAME,
+  "bg-amber-100",
+  ENVELOPE_PRICE,
+);
+
 export interface Transaction {
   id: string;
   timestamp: Date;
@@ -179,6 +189,7 @@ class GameStateManager {
         y: 0,
         b: 0,
         s: 0,
+        [ENVELOPE_CODE]: 0,
       },
       transactions: [],
       cash: 0,
@@ -362,10 +373,14 @@ class GameStateManager {
   calculatePaperCurrentWorth(paperColor: PaperColor | string): number {
     const color =
       typeof paperColor === "string"
-        ? this.state.paperColorMap.get(paperColor)
+        ? this.getColorByCode(paperColor)
         : paperColor;
 
     if (!color) return 0;
+
+    if (color.code === ENVELOPE_CODE) {
+      return color.basePrice;
+    }
 
     const isWhite = color.code === "w";
     const multiplier = isWhite
@@ -375,12 +390,16 @@ class GameStateManager {
     return color.basePrice * multiplier;
   }
 
+  calculateOrderConsumableCurrentWorth(paperColor: PaperColor | string): number {
+    return this.calculatePaperCurrentWorth(paperColor) + ENVELOPE_PRICE;
+  }
+
   // Calculate financial metrics - paper valued at cost (what we paid)
   calculateNetWorth(): number {
     // Paper inventory valued at purchase price
     const paperValue = Object.entries(this.state.paperInventory).reduce(
       (total, [colorCode, qty]) => {
-        const color = this.state.paperColorMap.get(colorCode);
+        const color = this.getColorByCode(colorCode);
         return total + qty * (color?.basePrice || 10);
       },
       0,
@@ -390,7 +409,7 @@ class GameStateManager {
     const pendingPaperValue = this.state.transactions
       .filter((t) => t.type === "paper" && t.pending && t.paperQuantity && t.paperColor)
       .reduce((total, t) => {
-        const color = this.state.paperColorMap.get(t.paperColor!);
+        const color = this.getColorByCode(t.paperColor!);
         return total + (t.paperQuantity! * (color?.basePrice || 10));
       }, 0);
 
@@ -410,7 +429,7 @@ class GameStateManager {
     // Paper inventory valued at selling price (with markdown)
     const paperSellValue = Object.entries(this.state.paperInventory).reduce(
       (total, [colorCode, qty]) => {
-        const color = this.state.paperColorMap.get(colorCode);
+        const color = this.getColorByCode(colorCode);
         const basePrice = color?.basePrice || 10;
         return total + qty * basePrice * this.state.parameters.sellMarkdown;
       },
@@ -421,7 +440,7 @@ class GameStateManager {
     const pendingPaperSellValue = this.state.transactions
       .filter((t) => t.type === "paper" && t.pending && t.paperQuantity && t.paperColor)
       .reduce((total, t) => {
-        const color = this.state.paperColorMap.get(t.paperColor!);
+        const color = this.getColorByCode(t.paperColor!);
         const basePrice = color?.basePrice || 10;
         return total + (t.paperQuantity! * basePrice * this.state.parameters.sellMarkdown);
       }, 0);
@@ -439,10 +458,16 @@ class GameStateManager {
 
   // Helper functions for colors (backwards compatibility)
   getColorByCode(code: string): PaperColor | undefined {
+    if (code === ENVELOPE_CODE) {
+      return ENVELOPE_ITEM;
+    }
     return this.state.paperColorMap.get(code);
   }
 
   getColorByName(name: string): PaperColor | undefined {
+    if (name.toLowerCase() === ENVELOPE_NAME.toLowerCase()) {
+      return ENVELOPE_ITEM;
+    }
     return this.state.paperColors.find(
       (c) => c.name.toLowerCase() === name.toLowerCase(),
     );
@@ -620,6 +645,7 @@ class GameStateManager {
         y: 0,
         b: 0,
         s: 0,
+        [ENVELOPE_CODE]: 0,
       },
       transactions: [],
       cash: 0,
