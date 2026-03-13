@@ -95,6 +95,13 @@ export function useAmplifySharedGameState(
   } | null>(null);
   const localChangesWhilePausedRef = useRef(false);
   const lastManualSyncNonceRef = useRef(0);
+  const shouldDeferIncomingSyncRef = useRef(Boolean(bindings.shouldDeferIncomingSync));
+  const isSyncPausedRef = useRef(Boolean(bindings.isSyncPaused));
+
+  useEffect(() => {
+    shouldDeferIncomingSyncRef.current = Boolean(bindings.shouldDeferIncomingSync);
+    isSyncPausedRef.current = Boolean(bindings.isSyncPaused);
+  }, [bindings.isSyncPaused, bindings.shouldDeferIncomingSync]);
 
   useEffect(() => {
     let cancelled = false;
@@ -298,7 +305,7 @@ export function useAmplifySharedGameState(
           }),
         );
 
-        if (bindings.shouldDeferIncomingSync || bindings.isSyncPaused) {
+        if (shouldDeferIncomingSyncRef.current || isSyncPausedRef.current) {
           deferredRemoteStateRef.current = {
             nextState,
             serialized,
@@ -328,7 +335,7 @@ export function useAmplifySharedGameState(
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, [bindings.isSyncPaused, bindings.teamId, isConfigured]);
+  }, [bindings.teamId, isConfigured]);
 
   useEffect(() => {
     if (bindings.shouldDeferIncomingSync || bindings.isSyncPaused) {
@@ -381,16 +388,33 @@ export function useAmplifySharedGameState(
     }
 
     lastManualSyncNonceRef.current = bindings.manualSyncNonce;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    deferredRemoteStateRef.current = null;
+    setSyncStatus({
+      state: "syncing",
+      message: `Forcing outbound changes for ${bindings.teamId}`,
+    });
 
     const { snapshot, serialized } = buildCurrentSnapshot();
 
     void persistSnapshot(snapshot, serialized)
       .then(() => {
+        skipPersistRef.current = serialized;
+        lastSavedRef.current = serialized;
         localChangesWhilePausedRef.current = false;
+        deferredRemoteStateRef.current = null;
         if (bindings.isSyncPaused) {
+          const syncedAt = new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
           setSyncStatus({
             state: "paused",
-            message: `Sync paused for ${bindings.teamId} (last manual sync sent)`,
+            message: `Outbound changes synced at ${syncedAt}. Sync still paused for ${bindings.teamId}`,
           });
         }
       })

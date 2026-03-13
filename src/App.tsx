@@ -1819,7 +1819,7 @@ function App() {
                     onClick={() => setManualSyncNonce((currentValue) => currentValue + 1)}
                     className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-500"
                   >
-                    Sync Once
+                    Force Outbound Changes
                   </button>
                 )}
                 <input
