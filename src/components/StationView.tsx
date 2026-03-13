@@ -614,6 +614,12 @@ export function StationView({
                     <span className="text-gray-600">Occasion:</span>
                     <span className="font-bold">{currentOrder.occasion}</span>
                   </div>
+                  <div className="text-sm">
+                    <span className="text-gray-600">Notes:</span>
+                    <p className="mt-0.5 whitespace-pre-line font-medium text-gray-800">
+                      {currentOrder.notes?.trim() || "No notes"}
+                    </p>
+                  </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-600">Team ID:</span>
                     <span className="font-bold">{gameState.getTeamId()}</span>

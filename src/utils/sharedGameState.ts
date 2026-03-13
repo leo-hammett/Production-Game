@@ -82,6 +82,7 @@ export interface SerializableOrder {
   verseSize: number;
   occasion: string;
   title?: string;
+  notes?: string;
   price: number;
   available: boolean;
   status: Order["status"];
@@ -298,6 +299,7 @@ function serializeOrder(order: Order): SerializableOrder {
     verseSize: order.verseSize,
     occasion: order.occasion,
     title: order.title,
+    notes: order.notes,
     price: order.price,
     available: order.available,
     status: order.status,
@@ -330,6 +332,7 @@ function deserializeOrder(
     verseSize: order.verseSize,
     occasion: order.occasion,
     title: order.title,
+    notes: order.notes,
     price: order.price,
     available: order.available,
     status: order.status,

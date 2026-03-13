@@ -158,6 +158,8 @@ export function buildSnapshotCsvExports(
     { header: "size", getValue: (order) => order.size },
     { header: "verseSize", getValue: (order) => order.verseSize },
     { header: "occasion", getValue: (order) => order.occasion },
+    { header: "title", getValue: (order) => order.title },
+    { header: "notes", getValue: (order) => order.notes },
     { header: "price", getValue: (order) => order.price },
     { header: "available", getValue: (order) => order.available },
     { header: "status", getValue: (order) => order.status },

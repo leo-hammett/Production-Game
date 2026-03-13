@@ -392,6 +392,7 @@ export interface Order {
   verseSize: number;
   occasion: string;
   title?: string; // Title text for stationery centering
+  notes?: string;
   price: number;
   available: boolean;
   status: OrderStatus;

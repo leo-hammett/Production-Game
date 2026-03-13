@@ -1892,6 +1892,9 @@ function App() {
                       Title
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Notes
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Price
                     </th>
                     <th className="px-2 py-1 text-center text-xs whitespace-nowrap">
@@ -2265,6 +2268,21 @@ function App() {
                         />
                       </td>
                       <td className="px-2 py-1">
+                        <input
+                          type="text"
+                          value={order.notes || ""}
+                          onChange={(e) =>
+                            updateOrderField(
+                              order.id,
+                              "notes",
+                              e.target.value,
+                            )
+                          }
+                          className="w-full min-w-40 px-1 py-1.5 border rounded text-xs h-8"
+                          placeholder="Notes..."
+                        />
+                      </td>
+                      <td className="px-2 py-1">
                         <div className="flex items-center">
                           <span className="mr-0.5 text-gray-500">£</span>
                           <input
@@ -2352,6 +2370,9 @@ function App() {
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Title
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Notes
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Price
