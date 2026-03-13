@@ -121,6 +121,8 @@ function getSyncStatusClass(state: string): string {
   switch (state) {
     case "synced":
       return "text-green-300";
+    case "paused":
+      return "text-amber-300";
     case "syncing":
     case "connecting":
     case "configuring":
@@ -486,6 +488,8 @@ function App() {
   });
   const [deliveryPrompts, setDeliveryPrompts] = useState<DeliveryPrompt[]>([]);
   const [isSyncGuardActive, setIsSyncGuardActive] = useState(false);
+  const [isSyncPaused, setIsSyncPaused] = useState(false);
+  const [manualSyncNonce, setManualSyncNonce] = useState(0);
   const syncStatus = useAmplifySharedGameState({
     teamId,
     orders,
@@ -521,6 +525,8 @@ function App() {
     stationSpeedMultipliers,
     setStationSpeedMultipliers,
     shouldDeferIncomingSync: isSyncGuardActive,
+    isSyncPaused,
+    manualSyncNonce,
   });
 
   const buildSnapshotParameters = () => ({
@@ -1798,6 +1804,24 @@ function App() {
                 <span className={`text-xs font-medium ${getSyncStatusClass(syncStatus.state)}`}>
                   {syncStatus.message}
                 </span>
+                <button
+                  onClick={() => setIsSyncPaused((currentValue) => !currentValue)}
+                  className={`rounded px-2 py-1 text-xs font-medium text-white ${
+                    isSyncPaused
+                      ? "bg-amber-600 hover:bg-amber-500"
+                      : "bg-gray-700 hover:bg-gray-600"
+                  }`}
+                >
+                  {isSyncPaused ? "Resume Sync" : "Pause Sync"}
+                </button>
+                {isSyncPaused && (
+                  <button
+                    onClick={() => setManualSyncNonce((currentValue) => currentValue + 1)}
+                    className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-500"
+                  >
+                    Sync Once
+                  </button>
+                )}
                 <input
                   type="text"
                   value={teamIdInput}
@@ -2672,11 +2696,11 @@ function App() {
 
         {/* Right Pane - Production Schedule */}
         <div
-          className="bg-gray-50 flex-1 relative overflow-y-auto"
+          className="bg-gray-50 flex-1 self-start"
           style={{ width: `${100 - leftPaneWidth}%` }}
         >
-          <div className="p-2">
-            <div className="max-w-2xl mx-auto">
+          <div className="sticky top-14 p-2">
+            <div className="max-w-2xl mx-auto max-h-[calc(100vh-4.5rem)] overflow-y-auto rounded">
               <ProductionSchedule 
                 orders={orders} 
                 updateOrderField={updateOrderField}

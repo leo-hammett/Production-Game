@@ -7,7 +7,9 @@ import {
 } from "./gameState";
 import { normalizeScheduleOrderIds } from "./orders";
 import type { Transaction } from "./gameState";
+import { calculateStationSchedule } from "./stationProgress";
 import {
+  STATION_IDS,
   calculateStationOrderTimeDistribution,
   type NormalDistribution,
   type Station,
@@ -181,6 +183,70 @@ export function estimateOrderTimeDistribution(
   return sumDistributions(stationDistributions);
 }
 
+function clampProgress(progressPercent: number | undefined): number {
+  if (!Number.isFinite(progressPercent)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(progressPercent ?? 0, 100));
+}
+
+function scaleDistributionByRemainingFraction(
+  distribution: NormalDistribution,
+  remainingFraction: number,
+): NormalDistribution {
+  const safeRemainingFraction = Math.max(0, Math.min(remainingFraction, 1));
+
+  return {
+    mean: distribution.mean * safeRemainingFraction,
+    stdDev: distribution.stdDev * Math.sqrt(safeRemainingFraction),
+  };
+}
+
+function estimateRemainingOrderTimeDistribution(
+  order: Order,
+  stations: Station[],
+  workstationSpeed: number,
+  expectedStationProgress: Partial<Record<1 | 2 | 3, { expectedProgress: number }>> = {},
+): NormalDistribution {
+  const effectiveSpeed = workstationSpeed > 0 ? workstationSpeed : 1;
+  const stationDistributions = stations
+    .map((station) => {
+      const stationNumber =
+        station.id === STATION_IDS[1]
+          ? 1
+          : station.id === STATION_IDS[2]
+            ? 2
+            : station.id === STATION_IDS[3]
+              ? 3
+              : null;
+      const distribution = calculateStationOrderTimeDistribution(station, order);
+      const scaledDistribution = {
+        mean: (distribution.mean * 1000) / effectiveSpeed,
+        stdDev: (distribution.stdDev * 1000) / effectiveSpeed,
+      };
+      const progressFraction =
+        stationNumber === null
+          ? 0
+          : clampProgress(expectedStationProgress[stationNumber]?.expectedProgress) / 100;
+
+      return scaleDistributionByRemainingFraction(
+        scaledDistribution,
+        1 - progressFraction,
+      );
+    })
+    .filter((distribution) => distribution.mean > 0);
+
+  if (!stationDistributions.length) {
+    return {
+      mean: order.quantity * 60_000,
+      stdDev: Math.max(5_000, order.quantity * 15_000),
+    };
+  }
+
+  return sumDistributions(stationDistributions);
+}
+
 function getSameDayTimestamp(sourceTime: number, referenceTime: number): number {
   const source = new Date(sourceTime);
   const reference = new Date(referenceTime);
@@ -300,6 +366,11 @@ export function evaluateScheduleCandidate(
   context: SchedulerContext,
 ): RankedScheduleCandidate {
   const orderMap = new Map(context.orders.map((order) => [order.id, order]));
+  const stationSchedule = calculateStationSchedule(
+    context.orders,
+    orderIds,
+    context.currentTime,
+  );
   const requiredPapers = buildRequiredPapers(
     orderIds,
     orderMap,
@@ -324,10 +395,11 @@ export function evaluateScheduleCandidate(
     .map((orderId) => orderMap.get(orderId))
     .filter((order): order is Order => Boolean(order))
     .map((order) => {
-      const timeDistribution = estimateOrderTimeDistribution(
+      const timeDistribution = estimateRemainingOrderTimeDistribution(
         order,
         context.stations,
         context.parameters.workstationSpeed,
+        stationSchedule[order.id],
       );
       cumulativeDistribution = addDistributions(
         cumulativeDistribution,

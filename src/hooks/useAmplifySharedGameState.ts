@@ -20,6 +20,7 @@ export type SyncState =
   | "configuring"
   | "disabled"
   | "connecting"
+  | "paused"
   | "syncing"
   | "synced"
   | "error";
@@ -66,6 +67,8 @@ interface AmplifySharedGameStateBindings {
     React.SetStateAction<StationSpeedMultipliers>
   >;
   shouldDeferIncomingSync?: boolean;
+  isSyncPaused?: boolean;
+  manualSyncNonce?: number;
 }
 
 export function useAmplifySharedGameState(
@@ -90,6 +93,8 @@ export function useAmplifySharedGameState(
     nextState: DeserializedSharedGameState;
     serialized: string | null;
   } | null>(null);
+  const localChangesWhilePausedRef = useRef(false);
+  const lastManualSyncNonceRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,6 +221,25 @@ export function useAmplifySharedGameState(
     },
   );
 
+  const buildCurrentSnapshot = useEffectEvent(() => {
+    const snapshot = buildSharedGameSnapshot({
+      teamId: bindings.teamId,
+      orders: bindings.orders,
+      paperInventory: bindings.paperInventory,
+      transactions: bindings.transactions,
+      cash: bindings.cash,
+      parameters: gameState.getParameters(),
+      currentSchedule: gameState.getCurrentSchedule(),
+      occasions: gameState.getOccasions(),
+      paperColors: gameState.getPaperColors(),
+    });
+
+    return {
+      snapshot,
+      serialized: JSON.stringify(snapshot),
+    };
+  });
+
   useEffect(() => {
     if (!isConfigured) {
       return;
@@ -274,7 +298,7 @@ export function useAmplifySharedGameState(
           }),
         );
 
-        if (bindings.shouldDeferIncomingSync) {
+        if (bindings.shouldDeferIncomingSync || bindings.isSyncPaused) {
           deferredRemoteStateRef.current = {
             nextState,
             serialized,
@@ -304,10 +328,10 @@ export function useAmplifySharedGameState(
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, [bindings.teamId, isConfigured]);
+  }, [bindings.isSyncPaused, bindings.teamId, isConfigured]);
 
   useEffect(() => {
-    if (bindings.shouldDeferIncomingSync) {
+    if (bindings.shouldDeferIncomingSync || bindings.isSyncPaused) {
       return;
     }
 
@@ -317,37 +341,100 @@ export function useAmplifySharedGameState(
 
     const deferredState = deferredRemoteStateRef.current;
     deferredRemoteStateRef.current = null;
+
+    if (localChangesWhilePausedRef.current) {
+      localChangesWhilePausedRef.current = false;
+      return;
+    }
+
     applyLocalState(deferredState.nextState, {
       skipNextPersist: true,
       serialized: deferredState.serialized,
     });
-  }, [applyLocalState, bindings.shouldDeferIncomingSync]);
+  }, [applyLocalState, bindings.isSyncPaused, bindings.shouldDeferIncomingSync]);
+
+  useEffect(() => {
+    if (!bindings.isSyncPaused || !isConfigured) {
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    setSyncStatus({
+      state: "paused",
+      message: `Sync paused for ${bindings.teamId}`,
+    });
+  }, [bindings.isSyncPaused, bindings.teamId, isConfigured]);
+
+  useEffect(() => {
+    if (
+      !bindings.isSyncPaused ||
+      !isConfigured ||
+      !initializedRef.current ||
+      !bindings.manualSyncNonce ||
+      bindings.manualSyncNonce === lastManualSyncNonceRef.current
+    ) {
+      return;
+    }
+
+    lastManualSyncNonceRef.current = bindings.manualSyncNonce;
+
+    const { snapshot, serialized } = buildCurrentSnapshot();
+
+    void persistSnapshot(snapshot, serialized)
+      .then(() => {
+        localChangesWhilePausedRef.current = false;
+        if (bindings.isSyncPaused) {
+          setSyncStatus({
+            state: "paused",
+            message: `Sync paused for ${bindings.teamId} (last manual sync sent)`,
+          });
+        }
+      })
+      .catch((error) => {
+        console.error("Amplify manual sync failed", error);
+        persistBlockedUntilRef.current = Date.now() + PERSIST_FAILURE_BACKOFF_MS;
+        lastFailedSerializedRef.current = serialized;
+        setSyncStatus({
+          state: "error",
+          message: "Manual sync failed",
+        });
+      });
+  }, [
+    bindings.isSyncPaused,
+    bindings.manualSyncNonce,
+    bindings.teamId,
+    buildCurrentSnapshot,
+    isConfigured,
+    persistSnapshot,
+  ]);
 
   useEffect(() => {
     if (!isConfigured || !initializedRef.current) {
       return;
     }
 
-    const snapshot = buildSharedGameSnapshot({
-      teamId: bindings.teamId,
-      orders: bindings.orders,
-      paperInventory: bindings.paperInventory,
-      transactions: bindings.transactions,
-      cash: bindings.cash,
-      parameters: gameState.getParameters(),
-      currentSchedule: gameState.getCurrentSchedule(),
-      occasions: gameState.getOccasions(),
-      paperColors: gameState.getPaperColors(),
-    });
-    const serialized = JSON.stringify(snapshot);
+    const { snapshot, serialized } = buildCurrentSnapshot();
+
+    if (bindings.isSyncPaused) {
+      if (lastSavedRef.current !== serialized) {
+        localChangesWhilePausedRef.current = true;
+      }
+      return;
+    }
 
     if (skipPersistRef.current === serialized) {
       skipPersistRef.current = null;
       lastSavedRef.current = serialized;
+      localChangesWhilePausedRef.current = false;
       return;
     }
 
     if (lastSavedRef.current === serialized) {
+      localChangesWhilePausedRef.current = false;
       return;
     }
 
@@ -373,6 +460,7 @@ export function useAmplifySharedGameState(
           message: "Amplify sync save failed; retrying later",
         });
       });
+      localChangesWhilePausedRef.current = false;
     }, SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -388,6 +476,7 @@ export function useAmplifySharedGameState(
     bindings.failureFineRatio,
     bindings.forecastSpeed,
     bindings.greedometer,
+    bindings.isSyncPaused,
     bindings.orders,
     bindings.paperInventory,
     bindings.paperDeliverySeconds,
@@ -399,6 +488,7 @@ export function useAmplifySharedGameState(
     bindings.transactions,
     bindings.whiteLoveMultiplier,
     bindings.workstationSpeed,
+    buildCurrentSnapshot,
     isConfigured,
     syncVersion,
   ]);
