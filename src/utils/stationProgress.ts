@@ -9,7 +9,9 @@ import { getScheduledProductionOrders } from "./orders";
 import {
   STATION_IDS,
   generateStationProcessingTimes,
-  getStationTaskSize,
+  getNearestDistribution,
+  getStationTaskDifficulty,
+  scaleDistributionByItemCount,
   type NormalDistribution,
   type RawStationTaskTime,
   type Station,
@@ -103,7 +105,10 @@ function getRecordedRawTimes(
         observedTimeTaken: task.recordedBatchTimeMs / 1000,
         numberOfItems: task.recordedQuantity,
         employeePerformance: task.performanceRating,
-        taskSize: getStationTaskSize(STATION_IDS[stationNumber], order),
+        taskDifficulty: getStationTaskDifficulty(
+          STATION_IDS[stationNumber],
+          order,
+        ),
       },
     ];
   });
@@ -135,16 +140,20 @@ export function getStationDistributionForOrder(
     rawTimes,
     gameState.getParameters().standardTimeRatio,
   );
-  const taskSize = getStationTaskSize(station.id, order);
-  const distribution =
-    distributions.get(taskSize) ||
-    station.sizeDistributions.get(taskSize) ||
+  const taskDifficulty = getStationTaskDifficulty(station.id, order);
+  const perItemDistribution =
+    getNearestDistribution(distributions, taskDifficulty) ||
+    getNearestDistribution(station.sizeDistributions, taskDifficulty) ||
     station.itemProcesingTime;
+  const distribution = scaleDistributionByItemCount(
+    {
+      mean: perItemDistribution.mean / station.speedMultiplier,
+      stdDev: perItemDistribution.stdDev / station.speedMultiplier,
+    },
+    order.quantity,
+  );
 
-  return {
-    mean: distribution.mean / station.speedMultiplier,
-    stdDev: distribution.stdDev / station.speedMultiplier,
-  };
+  return distribution;
 }
 
 export function calculateStationSchedule(
@@ -169,7 +178,7 @@ export function calculateStationSchedule(
         order,
         orders,
       );
-      const durationMs = Math.max(stationDistribution.mean * order.quantity * 1000, 0);
+      const durationMs = Math.max(stationDistribution.mean * 1000, 0);
       const task = getOrderStationTask(order, stationNumber);
       const actualElapsedMs = getStationActualElapsedMs(task, currentTime);
       const actualStartedAt = task?.startedAt ?? null;

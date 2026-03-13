@@ -1,4 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useEffectEvent,
+  type ChangeEvent,
+} from "react";
 import "./App.css";
 import type {
   Order,
@@ -33,7 +39,17 @@ import {
   getStatusColor,
   formatTime,
 } from "./utils/ui";
-import { DEFAULT_TEAM_ID, TEAM_ID_STORAGE_KEY } from "./utils/sharedGameState";
+import {
+  DEFAULT_TEAM_ID,
+  TEAM_ID_STORAGE_KEY,
+  buildSharedGameSnapshot,
+  deserializeSharedGameSnapshot,
+} from "./utils/sharedGameState";
+import {
+  downloadSnapshotCsvExports,
+  downloadSnapshotJson,
+  readSnapshotFile,
+} from "./utils/backup";
 import {
   DEFAULT_STATION_SPEED_MULTIPLIERS,
   type StationSpeedMultipliers,
@@ -53,6 +69,18 @@ type ViewType = "operations" | "station1" | "station2" | "station3";
 const SCHEDULER_ENABLED_STORAGE_KEY = "production-game/device-enable-scheduler";
 const LITE_FORECAST_ENABLED_STORAGE_KEY =
   "production-game/device-enable-lite-forecast";
+const AUTO_BACKUP_ENABLED_STORAGE_KEY =
+  "production-game/device-enable-auto-backup";
+const AUTO_BACKUP_INTERVAL_MS = 10 * 60 * 1000;
+const AUTO_BACKUP_IDLE_MS = 10 * 1000;
+
+interface BackupStatusState {
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  pendingSince: number | null;
+  lastError: string | null;
+  browserPermissionHintVisible: boolean;
+}
 
 function getStoredBoolean(key: string, fallback: boolean): boolean {
   if (typeof window === "undefined") {
@@ -125,6 +153,18 @@ function formatProfitPerSecond(value: number): string {
 
 function formatCurrency(value: number): string {
   return `£${value.toFixed(2)}`;
+}
+
+function formatTimestamp(value: number | null): string {
+  if (!value) {
+    return "never";
+  }
+
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function formatSuccessRate(schedule: RankedScheduleCandidate | null): string {
@@ -270,12 +310,26 @@ function App() {
   const liteForecastTimeoutRef = useRef<number | null>(null);
   const liteForecastIdleCallbackRef = useRef<number | null>(null);
   const lastLiteForecastMinuteBucketRef = useRef<number | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const autoBackupTimerRef = useRef<number | null>(null);
+  const autoBackupDueAtRef = useRef<number>(Date.now() + AUTO_BACKUP_INTERVAL_MS);
+  const lastUserActivityAtRef = useRef(Date.now());
   const [schedulerEnabled, setSchedulerEnabled] = useState(() =>
     getStoredBoolean(SCHEDULER_ENABLED_STORAGE_KEY, true),
   );
   const [liteForecastEnabled, setLiteForecastEnabled] = useState(() =>
     getStoredBoolean(LITE_FORECAST_ENABLED_STORAGE_KEY, true),
   );
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(() =>
+    getStoredBoolean(AUTO_BACKUP_ENABLED_STORAGE_KEY, false),
+  );
+  const [backupStatus, setBackupStatus] = useState<BackupStatusState>({
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    pendingSince: null,
+    lastError: null,
+    browserPermissionHintVisible: false,
+  });
   const syncStatus = useAmplifySharedGameState({
     teamId,
     orders,
@@ -310,6 +364,213 @@ function App() {
     setForecastSpeed,
     stationSpeedMultipliers,
     setStationSpeedMultipliers,
+  });
+
+  const buildSnapshotParameters = () => ({
+    ...gameState.getParameters(),
+    workstationSpeed,
+    safetyStock,
+    buyingCooldown,
+    paperDeliverySeconds,
+    sellMarkdown,
+    failureFineRatio,
+    colourLoveMultiplier,
+    whiteLoveMultiplier,
+    standardTimeRatio,
+    greedometer,
+    forecastSpeed,
+    stationSpeedMultipliers,
+  });
+
+  const createSnapshot = () =>
+    buildSharedGameSnapshot({
+      teamId,
+      orders,
+      paperInventory,
+      transactions,
+      cash,
+      parameters: buildSnapshotParameters(),
+      currentSchedule: gameState.getCurrentSchedule(),
+      occasions: gameState.getOccasions(),
+      paperColors: gameState.getPaperColors(),
+    });
+
+  const applyImportedSnapshot = (serializedSnapshot: ReturnType<typeof createSnapshot>) => {
+    const nextState = deserializeSharedGameSnapshot({
+      ...serializedSnapshot,
+      teamId,
+    });
+
+    gameState.setTeamId(teamId);
+    gameState.setPaperColors(nextState.paperColors);
+    gameState.setOccasions(nextState.occasions);
+    gameState.setCurrentSchedule(nextState.currentSchedule);
+    gameState.updateParameters(nextState.parameters);
+    setOrders(nextState.orders);
+    setPaperInventory(nextState.paperInventory);
+    setTransactions(nextState.transactions);
+    setCash(nextState.cash);
+    setSafetyStock(nextState.parameters.safetyStock);
+    setWorkstationSpeed(nextState.parameters.workstationSpeed);
+    setBuyingCooldown(nextState.parameters.buyingCooldown);
+    setPaperDeliverySeconds(nextState.parameters.paperDeliverySeconds);
+    setSellMarkdown(nextState.parameters.sellMarkdown);
+    setFailureFineRatio(nextState.parameters.failureFineRatio);
+    setColourLoveMultiplier(nextState.parameters.colourLoveMultiplier);
+    setWhiteLoveMultiplier(nextState.parameters.whiteLoveMultiplier);
+    setStandardTimeRatio(nextState.parameters.standardTimeRatio);
+    setGreedometer(nextState.parameters.greedometer);
+    setForecastSpeed(nextState.parameters.forecastSpeed);
+    setStationSpeedMultipliers(nextState.parameters.stationSpeedMultipliers);
+    setScheduleOrderIds([...nextState.currentSchedule.orderIds]);
+    setSchedulerSuggestions(null);
+    setPlanForecastSummaries({
+      currentPlan: null,
+      bestPlan: null,
+    });
+    setClearedSuggestedPaperPlanId(null);
+  };
+
+  const triggerJsonBackupDownload = (mode: "manual" | "auto", date = new Date()) => {
+    const timestamp = date.getTime();
+
+    setBackupStatus((currentStatus) => ({
+      ...currentStatus,
+      lastAttemptAt: timestamp,
+      lastError: null,
+      browserPermissionHintVisible:
+        currentStatus.browserPermissionHintVisible || mode === "auto",
+    }));
+
+    try {
+      downloadSnapshotJson(createSnapshot(), { date, teamId });
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        lastAttemptAt: timestamp,
+        lastSuccessAt: timestamp,
+        pendingSince: null,
+        lastError: null,
+        browserPermissionHintVisible:
+          currentStatus.browserPermissionHintVisible || mode === "auto",
+      }));
+      return true;
+    } catch (error) {
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        lastAttemptAt: timestamp,
+        lastError:
+          error instanceof Error ? error.message : "Backup download failed.",
+        browserPermissionHintVisible:
+          currentStatus.browserPermissionHintVisible || mode === "auto",
+      }));
+      return false;
+    }
+  };
+
+  const triggerCsvBackupDownload = () => {
+    try {
+      downloadSnapshotCsvExports(createSnapshot(), { teamId });
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        lastError: null,
+      }));
+    } catch (error) {
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        lastError:
+          error instanceof Error ? error.message : "CSV export failed.",
+      }));
+    }
+  };
+
+  const openImportPicker = () => {
+    importFileInputRef.current?.click();
+  };
+
+  const handleImportFileSelection = async (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!selectedFile) {
+      return;
+    }
+
+    try {
+      const snapshot = await readSnapshotFile(selectedFile);
+      const importedTeamId = snapshot.teamId || "unknown team";
+      const confirmed = window.confirm(
+        `Import backup from ${importedTeamId}? This will replace the current ${teamId} state and sync it to the shared dashboard.`,
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      applyImportedSnapshot(snapshot);
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        lastError: null,
+      }));
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "Import failed.",
+      );
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        lastError: error instanceof Error ? error.message : "Import failed.",
+      }));
+    }
+  };
+
+  const runAutoBackupCheck = useEffectEvent(() => {
+    if (autoBackupTimerRef.current !== null) {
+      window.clearTimeout(autoBackupTimerRef.current);
+      autoBackupTimerRef.current = null;
+    }
+
+    if (!autoBackupEnabled) {
+      return;
+    }
+
+    const now = Date.now();
+    const dueAt = autoBackupDueAtRef.current;
+    const idleForMs = now - lastUserActivityAtRef.current;
+
+    if (now >= dueAt && idleForMs >= AUTO_BACKUP_IDLE_MS) {
+      triggerJsonBackupDownload("auto", new Date(now));
+      autoBackupDueAtRef.current = now + AUTO_BACKUP_INTERVAL_MS;
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        pendingSince: null,
+      }));
+      autoBackupTimerRef.current = window.setTimeout(() => {
+        runAutoBackupCheck();
+      }, AUTO_BACKUP_INTERVAL_MS);
+      return;
+    }
+
+    if (now >= dueAt) {
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        pendingSince: currentStatus.pendingSince ?? dueAt,
+      }));
+      autoBackupTimerRef.current = window.setTimeout(() => {
+        runAutoBackupCheck();
+      }, Math.max(AUTO_BACKUP_IDLE_MS - idleForMs, 250));
+      return;
+    }
+
+    setBackupStatus((currentStatus) =>
+      currentStatus.pendingSince === null
+        ? currentStatus
+        : {
+            ...currentStatus,
+            pendingSince: null,
+          },
+    );
+    autoBackupTimerRef.current = window.setTimeout(() => {
+      runAutoBackupCheck();
+    }, Math.max(dueAt - now, 250));
   });
 
 
@@ -361,7 +622,8 @@ function App() {
     );
 
     setLeadTimeDrafts((currentDrafts) => {
-      const { [order.id]: _removed, ...remainingDrafts } = currentDrafts;
+      const remainingDrafts = { ...currentDrafts };
+      delete remainingDrafts[order.id];
       return remainingDrafts;
     });
   };
@@ -624,6 +886,41 @@ function App() {
   }, [liteForecastEnabled]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      AUTO_BACKUP_ENABLED_STORAGE_KEY,
+      autoBackupEnabled ? "1" : "0",
+    );
+  }, [autoBackupEnabled]);
+
+  useEffect(() => {
+    const markUserActivity = () => {
+      lastUserActivityAtRef.current = Date.now();
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      "keydown",
+      "mousedown",
+      "pointerdown",
+      "touchstart",
+      "scroll",
+    ];
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, markUserActivity, { passive: true });
+    });
+    document.addEventListener("input", markUserActivity, true);
+    document.addEventListener("change", markUserActivity, true);
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, markUserActivity);
+      });
+      document.removeEventListener("input", markUserActivity, true);
+      document.removeEventListener("change", markUserActivity, true);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (liteForecastTimeoutRef.current !== null) {
         window.clearTimeout(liteForecastTimeoutRef.current);
@@ -640,6 +937,37 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (autoBackupTimerRef.current !== null) {
+      window.clearTimeout(autoBackupTimerRef.current);
+      autoBackupTimerRef.current = null;
+    }
+
+    if (!autoBackupEnabled) {
+      setBackupStatus((currentStatus) => ({
+        ...currentStatus,
+        pendingSince: null,
+      }));
+      return;
+    }
+
+    lastUserActivityAtRef.current = Date.now();
+    autoBackupDueAtRef.current = Date.now() + AUTO_BACKUP_INTERVAL_MS;
+    setBackupStatus((currentStatus) => ({
+      ...currentStatus,
+      pendingSince: null,
+      lastError: null,
+    }));
+    runAutoBackupCheck();
+
+    return () => {
+      if (autoBackupTimerRef.current !== null) {
+        window.clearTimeout(autoBackupTimerRef.current);
+        autoBackupTimerRef.current = null;
+      }
+    };
+  }, [autoBackupEnabled]);
 
   useEffect(() => {
     if (!schedulerEnabled || currentView !== "operations") {
@@ -885,6 +1213,16 @@ function App() {
     !schedulerSuggestions?.bestSuggestion ||
     currentScheduleMatchesSuggestion ||
     (suggestedPlanNeedsPaperOrder && buyingCooldownRemainingSeconds > 0);
+  const backupStatusLabel = autoBackupEnabled
+    ? backupStatus.pendingSince
+      ? `Auto backup waiting for 10s idle since ${formatTimestamp(backupStatus.pendingSince)}`
+      : `Auto backup on. Last backup ${formatTimestamp(backupStatus.lastSuccessAt)}`
+    : "Auto backup off";
+  const backupStatusClass = backupStatus.lastError
+    ? "text-red-300"
+    : autoBackupEnabled
+      ? "text-green-300"
+      : "text-gray-300";
 
   // Add new transaction
   const addTransaction = (
@@ -1056,6 +1394,14 @@ function App() {
 
   return (
     <div className="min-h-screen w-full bg-gray-100">
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={handleImportFileSelection}
+      />
+
       {/* Cash Metrics Header Bar - Different colors for different views */}
       <div className={`text-white p-2 border-b border-gray-700 sticky top-0 z-40 ${
         currentView === "station1" ? "bg-blue-900" :
@@ -1063,7 +1409,7 @@ function App() {
         currentView === "station3" ? "bg-purple-900" :
         "bg-gray-900"
       }`}>
-        <div className="flex justify-between items-center">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex gap-6">
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400">Cash:</span>
@@ -1087,9 +1433,9 @@ function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-end gap-4">
             {/* Navigation Buttons */}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button 
                 onClick={() => setCurrentView("operations")}
                 className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
@@ -1136,6 +1482,49 @@ function App() {
                 </span>
               </div>
             )}
+
+            <div className="flex flex-wrap items-center gap-2 border-l border-gray-600 pl-4">
+              <button
+                onClick={() => {
+                  triggerJsonBackupDownload("manual");
+                }}
+                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
+              >
+                Export JSON
+              </button>
+              <button
+                onClick={triggerCsvBackupDownload}
+                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
+              >
+                Export CSV
+              </button>
+              <button
+                onClick={openImportPicker}
+                className="rounded bg-gray-700 px-2 py-1 text-xs font-medium text-white hover:bg-gray-600"
+              >
+                Import JSON
+              </button>
+              <label className="flex items-center gap-2 text-xs text-gray-200">
+                <input
+                  type="checkbox"
+                  checked={autoBackupEnabled}
+                  onChange={(event) => setAutoBackupEnabled(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-gray-500 bg-gray-800"
+                />
+                Auto backup every 10 min
+              </label>
+            </div>
+
+            <div className="flex max-w-md flex-col border-l border-gray-600 pl-4">
+              <span className={`text-xs font-medium ${backupStatusClass}`}>
+                {backupStatus.lastError || backupStatusLabel}
+              </span>
+              {backupStatus.browserPermissionHintVisible && autoBackupEnabled && (
+                <span className="text-[11px] text-gray-400">
+                  If downloads stop appearing, allow automatic downloads for this site.
+                </span>
+              )}
+            </div>
 
             <div className="flex items-center gap-2 border-l border-gray-600 pl-4">
               <span className={`text-xs font-medium ${getSyncStatusClass(syncStatus.state)}`}>

@@ -2,7 +2,7 @@ import type { GameParameters, Order, PaperInventory } from "./gameState";
 import { normalizeScheduleOrderIds } from "./orders";
 import type { Transaction } from "./gameState";
 import {
-  calculateStationItemTimeDistribution,
+  calculateStationOrderTimeDistribution,
   type NormalDistribution,
   type Station,
 } from "./station";
@@ -156,7 +156,7 @@ export function estimateOrderTimeDistribution(
   const effectiveSpeed = workstationSpeed > 0 ? workstationSpeed : 1;
   const stationDistributions = stations
     .map((station) => {
-      const distribution = calculateStationItemTimeDistribution(station, order);
+      const distribution = calculateStationOrderTimeDistribution(station, order);
       return {
         mean: (distribution.mean * 1000) / effectiveSpeed,
         stdDev: (distribution.stdDev * 1000) / effectiveSpeed,
@@ -171,20 +171,7 @@ export function estimateOrderTimeDistribution(
     };
   }
 
-  const firstItemDistribution = sumDistributions(stationDistributions);
-  const bottleneckDistribution = stationDistributions.reduce((slowest, current) =>
-    current.mean > slowest.mean ? current : slowest,
-  );
-  const additionalItems = Math.max(0, order.quantity - 1);
-
-  if (!additionalItems) {
-    return firstItemDistribution;
-  }
-
-  return addDistributions(firstItemDistribution, {
-    mean: bottleneckDistribution.mean * additionalItems,
-    stdDev: bottleneckDistribution.stdDev * Math.sqrt(additionalItems),
-  });
+  return sumDistributions(stationDistributions);
 }
 
 function getSameDayTimestamp(sourceTime: number, referenceTime: number): number {

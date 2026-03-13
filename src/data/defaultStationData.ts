@@ -22,175 +22,209 @@ import { STANDARD_TIME_RATIO } from "../utils/gameConstants";
  * If we need more granular control in the future, we can implement dynamic worker assignment.
  */
 
-// Station 1: Folding Station
-// Fast operation - worker completes folding then helps Station 2
+// =============================================================================
+// Station 1: Folding (per-card cumulative times, assuming batch of 8)
+// =============================================================================
+
 const station1FoldingRawTimes: RawStationTaskTime[] = [
-  // A5 folding (1 fold - simplest)
-  // TODO: BE AWARE FOLD A5 preceeds A6, so T A6 = TA5 + TA4
+  // A5 folding (1 fold cumulative)
   {
-    observedTimeTaken: 6.98,
+    observedTimeTaken: 7.17,
     numberOfItems: 1,
     employeePerformance: 0.7,
-    taskSize: 1,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 5.35,
-    numberOfItems: 1,
-    employeePerformance: 0.9,
-    taskSize: 1,
-  },
-  {
-    observedTimeTaken: 5.48,
-    numberOfItems: 1,
-    employeePerformance: 0.9,
-    taskSize: 1,
-  },
-  {
-    observedTimeTaken: 5.5,
-    numberOfItems: 1,
-    employeePerformance: 0.95,
-    taskSize: 1,
-  },
-  {
-    observedTimeTaken: 4.83,
-    numberOfItems: 1,
-    employeePerformance: 0.95,
-    taskSize: 1,
-  },
-
-  // A6 folding (2 folds - medium complexity)
-  {
-    observedTimeTaken: 6.4,
-    numberOfItems: 1,
-    employeePerformance: 0.7,
-    taskSize: 2,
-  },
-  {
-    observedTimeTaken: 5.57,
-    numberOfItems: 1,
-    employeePerformance: 0.9,
-    taskSize: 2,
-  },
-  {
-    observedTimeTaken: 4.8,
-    numberOfItems: 1,
-    employeePerformance: 0.95,
-    taskSize: 2,
-  },
-  {
-    observedTimeTaken: 4.33,
-    numberOfItems: 1,
-    employeePerformance: 0.95,
-    taskSize: 2,
-  },
-  {
-    observedTimeTaken: 3.98,
-    numberOfItems: 1,
-    employeePerformance: 1.0,
-    taskSize: 2,
-  },
-
-  // A7 folding (3 folds - most complex)
-
-  {
-    observedTimeTaken: 8.03,
-    numberOfItems: 1,
-    employeePerformance: 0.6,
-    taskSize: 3,
-  },
-  {
-    observedTimeTaken: 6.53,
+    observedTimeTaken: 6.0,
     numberOfItems: 1,
     employeePerformance: 0.8,
-    taskSize: 3,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 5.14,
+    observedTimeTaken: 5.29,
     numberOfItems: 1,
-    employeePerformance: 1.0,
-    taskSize: 3,
+    employeePerformance: 0.9,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 4.36,
+    observedTimeTaken: 5.16,
     numberOfItems: 1,
-    employeePerformance: 1.0,
-    taskSize: 3,
+    employeePerformance: 0.95,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 4.7,
+    observedTimeTaken: 5.03,
     numberOfItems: 1,
     employeePerformance: 1.0,
-    taskSize: 3,
+    taskDifficulty: 1,
+  },
+
+  // A6 folding (2 folds cumulative)
+  {
+    observedTimeTaken: 13.26,
+    numberOfItems: 1,
+    employeePerformance: 0.7,
+    taskDifficulty: 2,
+  },
+  {
+    observedTimeTaken: 11.87,
+    numberOfItems: 1,
+    employeePerformance: 0.8,
+    taskDifficulty: 2,
+  },
+  {
+    observedTimeTaken: 10.29,
+    numberOfItems: 1,
+    employeePerformance: 0.9,
+    taskDifficulty: 2,
+  },
+  {
+    observedTimeTaken: 10.04,
+    numberOfItems: 1,
+    employeePerformance: 0.95,
+    taskDifficulty: 2,
+  },
+  {
+    observedTimeTaken: 9.46,
+    numberOfItems: 1,
+    employeePerformance: 1.0,
+    taskDifficulty: 2,
+  },
+
+  // A7 folding (3 folds cumulative)
+  {
+    observedTimeTaken: 20.64,
+    numberOfItems: 1,
+    employeePerformance: 0.7,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 17.82,
+    numberOfItems: 1,
+    employeePerformance: 0.8,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 15.71,
+    numberOfItems: 1,
+    employeePerformance: 0.9,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 15.23,
+    numberOfItems: 1,
+    employeePerformance: 0.95,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 14.04,
+    numberOfItems: 1,
+    employeePerformance: 1.0,
+    taskDifficulty: 3,
   },
 ];
 
-// Station 2: Stencilling Station
-// EFFECTIVE TIMES - includes help from Station 1 worker
-// These times represent the combined throughput of Rick, Gauthami, and help from Station 1
+// =============================================================================
+// Station 2: Stencilling (per-card times with helper model, batch of 8)
+// Helper arrives after Station 1 finishes folding.
+// taskDifficulty 1=A5, 2=A6, 3=A7 (affects when helper arrives)
+// =============================================================================
+
 const station2StencillingRawTimes: RawStationTaskTime[] = [
-  // Combined effective times for stencilling (treating as single task size for now)
-  // These are abstracted times that account for parallel work and Station 1 help
+  // A5 cards — helper arrives after A5 folding completes
   {
-    observedTimeTaken: 119.24,
-    numberOfItems: 5,
-    employeePerformance: 0.5,
-    taskSize: 1,
+    observedTimeTaken: 65.82,
+    numberOfItems: 1,
+    employeePerformance: 0.7,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 93.57,
-    numberOfItems: 5,
-    employeePerformance: 0.9,
-    taskSize: 1,
+    observedTimeTaken: 57.63,
+    numberOfItems: 1,
+    employeePerformance: 0.8,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 87.97,
-    numberOfItems: 5,
+    observedTimeTaken: 46.7,
+    numberOfItems: 1,
     employeePerformance: 0.9,
-    taskSize: 1,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 85.25,
-    numberOfItems: 5,
-    employeePerformance: 0.9,
-    taskSize: 1,
+    observedTimeTaken: 49.63,
+    numberOfItems: 1,
+    employeePerformance: 0.95,
+    taskDifficulty: 1,
   },
   {
-    observedTimeTaken: 92.22,
-    numberOfItems: 5,
-    employeePerformance: 0.9,
-    taskSize: 1,
+    observedTimeTaken: 46.47,
+    numberOfItems: 1,
+    employeePerformance: 1.0,
+    taskDifficulty: 1,
   },
 
-  // Additional observations (second set)
+  // A6 cards — helper arrives after A6 folding completes
   {
-    observedTimeTaken: 93.0,
-    numberOfItems: 5,
-    employeePerformance: 0.9,
-    taskSize: 1,
+    observedTimeTaken: 67.16,
+    numberOfItems: 1,
+    employeePerformance: 0.7,
+    taskDifficulty: 2,
   },
   {
-    observedTimeTaken: 84.0,
-    numberOfItems: 5,
-    employeePerformance: 0.9,
-    taskSize: 1,
-  },
-  {
-    observedTimeTaken: 73.0,
-    numberOfItems: 5,
+    observedTimeTaken: 54.23,
+    numberOfItems: 1,
     employeePerformance: 0.8,
-    taskSize: 1,
+    taskDifficulty: 2,
   },
   {
-    observedTimeTaken: 75.0,
-    numberOfItems: 5,
-    employeePerformance: 1.0,
-    taskSize: 1,
+    observedTimeTaken: 51.43,
+    numberOfItems: 1,
+    employeePerformance: 0.9,
+    taskDifficulty: 2,
   },
   {
-    observedTimeTaken: 68.0,
-    numberOfItems: 5,
+    observedTimeTaken: 48.38,
+    numberOfItems: 1,
+    employeePerformance: 0.95,
+    taskDifficulty: 2,
+  },
+  {
+    observedTimeTaken: 47.02,
+    numberOfItems: 1,
     employeePerformance: 1.0,
-    taskSize: 1,
+    taskDifficulty: 2,
+  },
+
+  // A7 cards — helper arrives after A7 folding completes
+  {
+    observedTimeTaken: 73.61,
+    numberOfItems: 1,
+    employeePerformance: 0.7,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 70.3,
+    numberOfItems: 1,
+    employeePerformance: 0.8,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 64.01,
+    numberOfItems: 1,
+    employeePerformance: 0.9,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 54.33,
+    numberOfItems: 1,
+    employeePerformance: 0.95,
+    taskDifficulty: 3,
+  },
+  {
+    observedTimeTaken: 52.69,
+    numberOfItems: 1,
+    employeePerformance: 1.0,
+    taskDifficulty: 3,
   },
 ];
 
@@ -202,25 +236,25 @@ const station3WritingRawTimes: RawStationTaskTime[] = [
     observedTimeTaken: 51.7,
     numberOfItems: 1,
     employeePerformance: 0.8311,
-    taskSize: 2,
+    taskDifficulty: 2,
   }, // 2-line verse
   {
     observedTimeTaken: 46.8,
     numberOfItems: 1,
     employeePerformance: 0.8718,
-    taskSize: 2,
+    taskDifficulty: 2,
   },
   {
     observedTimeTaken: 45.41,
     numberOfItems: 1,
     employeePerformance: 0.9422,
-    taskSize: 2,
+    taskDifficulty: 2,
   },
   {
     observedTimeTaken: 43.76,
     numberOfItems: 1,
     employeePerformance: 0.9403,
-    taskSize: 2,
+    taskDifficulty: 2,
   },
   // Note: Last entry was incomplete in original data
 ];

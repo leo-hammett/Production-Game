@@ -1,5 +1,6 @@
 // Production station definitions and utilities
-import { createDefaultStations } from '../data/defaultStationData';
+import { createDefaultStations } from "../data/defaultStationData";
+import { STANDARD_TIME_RATIO } from "./gameConstants";
 
 // Define a minimal Order interface to avoid circular dependency
 // This matches the Order type in gameState.ts but only includes fields needed here
@@ -24,9 +25,9 @@ export interface NormalDistribution {
 
 export interface RawStationTaskTime {
   observedTimeTaken: number;
-  numberOfItems: number; // if many are done at once we need to know this as it'll need to be weighted differently when merging distributuions
-  employeePerformance: number; // Employee will be faster during timing.
-  taskSize: number; //Weather writing 2,4,6 lines or folding 2,4,6 times etc.
+  numberOfItems: number;
+  employeePerformance: number; // < 1 means slower than normal during observation.
+  taskDifficulty: number; // Writing/folding difficulty bucket, e.g. 1/2/3.
 }
 
 // Station type representing a production workstation/cell
@@ -56,6 +57,14 @@ export const DEFAULT_STATION_SPEED_MULTIPLIERS: StationSpeedMultipliers = {
   station3: 1,
 };
 
+const STATION_SIZE_TO_DIFFICULTY: Record<string, number> = {
+  A5: 1,
+  A6: 2,
+  A7: 3,
+};
+
+const STATION3_FIXED_TASK_DIFFICULTY = 2;
+
 // Station configuration for different product sizes, based on the station this will vary.
 // Paper will have sizes 1,2,3 based on fold count.
 // Verses will have 2,4,6 based on number of verses etc etc. WE MAY CHANGE THIS IF 4 lines not double 2?
@@ -72,80 +81,69 @@ export interface StationSizeConfig {
  * Generate processing time distributions from raw observed times
  * @param rawTimes - Array of observed task times
  * @param standardTimeRatio - Ratio from gameState for normalizing times
- * @returns Map of distributions by task size
+ * @returns Map of per-item distributions by task difficulty
  */
 export function generateStationProcessingTimes(
   rawTimes: RawStationTaskTime[],
-  standardTimeRatio: number = 1.23, //TODO: Make this an adjustable parameter //The standard time is like contingency for workers breaks and so on..
+  standardTimeRatio: number = STANDARD_TIME_RATIO,
 ): Map<number, NormalDistribution> {
   const distributions = new Map<number, NormalDistribution>();
-
-  // Group raw times by task size. What we are meant to do is widen the variance down if there's a lot of items processed in one recording, and divide the mean time. Like un-central limit theorem.
-  const timesBySize = new Map<number, RawStationTaskTime[]>();
+  const timesByDifficulty = new Map<number, RawStationTaskTime[]>();
 
   for (const rawTime of rawTimes) {
-    const size = rawTime.taskSize;
-    if (!timesBySize.has(size)) {
-      timesBySize.set(size, []);
+    const samples = timesByDifficulty.get(rawTime.taskDifficulty);
+    if (samples) {
+      samples.push(rawTime);
+    } else {
+      timesByDifficulty.set(rawTime.taskDifficulty, [rawTime]);
     }
-    timesBySize.get(size)!.push(rawTime);
   }
 
-  // Calculate distribution for each size
-  for (const [size, times] of timesBySize) {
-    if (times.length === 0) continue;
+  for (const [taskDifficulty, samples] of timesByDifficulty) {
+    if (!samples.length) {
+      continue;
+    }
 
-    // Normalize times to per-item basis accounting for employee performance.
-    // Batch recordings are averages over multiple items, so weight them by
-    // `numberOfItems` when reconstructing the single-item distribution.
-    const normalizedTimes = times.map((t) => {
-      // Adjust for employee performance (they're faster during timing)
-      const adjustedTime = t.observedTimeTaken / t.employeePerformance;
-      // Convert to per-item time
-      const perItemTime = adjustedTime / t.numberOfItems;
-      // Apply standard time ratio from game state
+    const normalizedSamples = samples.map((sample) => {
+      const itemCount = Math.max(1, sample.numberOfItems);
+      const normalTime = sample.observedTimeTaken * sample.employeePerformance;
+
       return {
-        perItemTime: perItemTime * standardTimeRatio,
-        weight: Math.max(t.numberOfItems, 1),
+        itemCount,
+        perItemMean: (normalTime * standardTimeRatio) / itemCount,
       };
     });
 
-    const totalWeight = normalizedTimes.reduce(
-      (sum, sample) => sum + sample.weight,
+    const totalItems = normalizedSamples.reduce(
+      (sum, sample) => sum + sample.itemCount,
       0,
     );
 
-    // Calculate weighted mean
+    if (!totalItems) {
+      continue;
+    }
+
     const mean =
-      normalizedTimes.reduce(
-        (sum, sample) => sum + sample.perItemTime * sample.weight,
+      normalizedSamples.reduce(
+        (sum, sample) => sum + sample.perItemMean * sample.itemCount,
         0,
-      ) / totalWeight;
+      ) / totalItems;
 
-    // Convert batch-average variance back toward a one-item variance estimate by
-    // weighting each observation by its batch size.
+    // Batch observations are means over multiple items. Multiply the squared
+    // deviation by batch size to infer the underlying single-item variance.
     const variance =
-      normalizedTimes.reduce(
-        (sum, sample) =>
-          sum + sample.weight * Math.pow(sample.perItemTime - mean, 2),
-        0,
-      ) / totalWeight;
-    const stdDev = Math.sqrt(variance);
+      normalizedSamples.length > 1
+        ? normalizedSamples.reduce(
+            (sum, sample) =>
+              sum +
+              sample.itemCount * Math.pow(sample.perItemMean - mean, 2),
+            0,
+          ) / normalizedSamples.length
+        : 0;
 
-    distributions.set(size, {
+    distributions.set(taskDifficulty, {
       mean,
-      stdDev,
-    });
-  }
-
-  // Interpolate missing sizes if we have neighbors
-  // For example, if we have size 2 and 6 but not 4:
-  if (!distributions.has(4) && distributions.has(2) && distributions.has(6)) {
-    const dist2 = distributions.get(2)!;
-    const dist6 = distributions.get(6)!;
-    distributions.set(4, {
-      mean: (dist2.mean + dist6.mean) / 2,
-      stdDev: (dist2.stdDev + dist6.stdDev) / 2,
+      stdDev: Math.sqrt(Math.max(variance, 0)),
     });
   }
 
@@ -166,7 +164,7 @@ export class StationManager {
     // These stations use effective processing times to handle the complexity
     // of Station 1 workers helping Station 2 after finishing folding
     const defaultStations = createDefaultStations();
-    defaultStations.forEach(station => {
+    defaultStations.forEach((station) => {
       this.stations.set(station.id, station);
     });
   }
@@ -204,7 +202,10 @@ export class StationManager {
     speedMultipliers: Partial<StationSpeedMultipliers>,
   ): void {
     if (speedMultipliers.station1 !== undefined) {
-      this.setStationSpeedMultiplier("station1_folding", speedMultipliers.station1);
+      this.setStationSpeedMultiplier(
+        "station1_folding",
+        speedMultipliers.station1,
+      );
     }
     if (speedMultipliers.station2 !== undefined) {
       this.setStationSpeedMultiplier(
@@ -213,7 +214,10 @@ export class StationManager {
       );
     }
     if (speedMultipliers.station3 !== undefined) {
-      this.setStationSpeedMultiplier("station3_writing", speedMultipliers.station3);
+      this.setStationSpeedMultiplier(
+        "station3_writing",
+        speedMultipliers.station3,
+      );
     }
   }
 }
@@ -225,14 +229,44 @@ export function calculateStationOccupationTimePerOrder(
   station: Station,
   order: Order,
 ): NormalDistribution {
-  // TODO: Your implementation here
-  // You can access station properties directly from the station parameter
-  // The station object is passed in, or you can get it from stationManager:
-  // const station = stationManager.getStation(stationId);
+  return calculateStationOrderTimeDistribution(station, order);
+}
 
+export function getNearestDistribution(
+  distributions: Map<number, NormalDistribution>,
+  taskDifficulty: number,
+): NormalDistribution | null {
+  const exactMatch = distributions.get(taskDifficulty);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const availableDifficulties = Array.from(distributions.keys());
+  if (!availableDifficulties.length) {
+    return null;
+  }
+
+  const closestDifficulty = availableDifficulties.reduce((closest, current) => {
+    const currentDistance = Math.abs(current - taskDifficulty);
+    const closestDistance = Math.abs(closest - taskDifficulty);
+    if (currentDistance !== closestDistance) {
+      return currentDistance < closestDistance ? current : closest;
+    }
+
+    return current < closest ? current : closest;
+  });
+
+  return distributions.get(closestDifficulty) ?? null;
+}
+
+export function scaleDistributionByItemCount(
+  distribution: NormalDistribution,
+  itemCount: number,
+): NormalDistribution {
+  const safeItemCount = Math.max(1, itemCount);
   return {
-    mean: 0,
-    stdDev: 0,
+    mean: distribution.mean * safeItemCount,
+    stdDev: distribution.stdDev * Math.sqrt(safeItemCount),
   };
 }
 
@@ -240,17 +274,10 @@ export function calculateStationItemTimeDistribution(
   station: Station,
   order: Order,
 ): NormalDistribution {
-  // Determine the task size based on order properties and station type
-  const taskSize = getStationTaskSize(station.id, order);
-
-  // Get the distribution for this task size
-  let distribution: NormalDistribution;
-  if (station.sizeDistributions?.has(taskSize)) {
-    distribution = station.sizeDistributions.get(taskSize)!;
-  } else {
-    // Fallback to base distribution
-    distribution = station.itemProcesingTime;
-  }
+  const taskDifficulty = getStationTaskDifficulty(station.id, order);
+  const distribution =
+    getNearestDistribution(station.sizeDistributions, taskDifficulty) ||
+    station.itemProcesingTime;
 
   // Apply station's speed multiplier
   return {
@@ -259,31 +286,44 @@ export function calculateStationItemTimeDistribution(
   };
 }
 
-export function getStationTaskSize(
+export function calculateStationOrderTimeDistribution(
+  station: Station,
+  order: Order,
+): NormalDistribution {
+  return scaleDistributionByItemCount(
+    calculateStationItemTimeDistribution(station, order),
+    order.quantity,
+  );
+}
+
+export function getStationTaskDifficulty(
   stationId: string,
   order: Pick<Order, "size" | "verseSize">,
 ): number {
   if (stationId.includes("verse") || stationId.includes("writing")) {
-    return order.verseSize;
+    return STATION3_FIXED_TASK_DIFFICULTY;
   }
 
-  if (stationId.includes("fold") || stationId.includes("cut")) {
-    const sizeMap: Record<string, number> = {
-      A5: 1,
-      A6: 2,
-      A7: 3,
-    };
-    return sizeMap[order.size] || 1;
+  if (
+    stationId.includes("fold") ||
+    stationId.includes("cut") ||
+    stationId.includes("stencil")
+  ) {
+    return STATION_SIZE_TO_DIFFICULTY[order.size] || 1;
   }
 
   return 1;
 }
 
+export const getStationTaskSize = getStationTaskDifficulty;
+
 // Calculate handover time between stations
 export function calculateHandoverDistribution(
-  fromStation: Station,
-  toStation: Station,
+  _fromStation: Station,
+  _toStation: Station,
 ): NormalDistribution {
+  void _fromStation;
+  void _toStation;
   // TODO: Add handover time distribution between stations
   return {
     mean: 0,
