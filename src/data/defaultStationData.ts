@@ -266,7 +266,7 @@ export function createDefaultStations(): Station[] {
       id: "station1_folding",
       name: "Folding Station",
       rawStationTaskTimes: station1FoldingRawTimes,
-      itemProcesingTime: { mean: 6, stdDev: 1.5 }, // Fallback
+      itemProcesingTime: { mean: 11.13, stdDev: 4.93 }, // Fallback
       sizeDistributions: new Map(),
       speedMultiplier: 1.0,
       generateProcessingTimes: function () {
@@ -281,7 +281,7 @@ export function createDefaultStations(): Station[] {
       id: "station2_stencilling",
       name: "Stencilling Station (Effective)",
       rawStationTaskTimes: station2StencillingRawTimes,
-      itemProcesingTime: { mean: 40, stdDev: 10 }, // Fallback
+      itemProcesingTime: { mean: 56.63, stdDev: 9.22 }, // Fallback
       sizeDistributions: new Map(),
       speedMultiplier: 1.0,
       generateProcessingTimes: function () {
@@ -296,7 +296,7 @@ export function createDefaultStations(): Station[] {
       id: "station3_writing",
       name: "Writing Station",
       rawStationTaskTimes: station3WritingRawTimes,
-      itemProcesingTime: { mean: 47, stdDev: 3.5 }, // Fallback
+      itemProcesingTime: { mean: 46.92, stdDev: 3.42 }, // Fallback
       sizeDistributions: new Map(),
       speedMultiplier: 1.0,
       generateProcessingTimes: function () {

@@ -21,6 +21,7 @@ import {
 } from "./utils/orders";
 import { ProductionSchedule } from "./components/ProductionSchedule";
 import { StationView } from "./components/StationView";
+import { TitleCenteringTool } from "./components/TitleCenteringTool";
 import type {
   PaperInventory,
   Transaction,

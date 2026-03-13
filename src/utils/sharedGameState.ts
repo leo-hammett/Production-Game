@@ -71,6 +71,7 @@ export interface SerializablePaperColor {
 
 export interface SerializableOrder {
   id: string;
+  displayId?: string;
   orderTime: number;
   quantity: number;
   leadTime: number;
@@ -78,6 +79,7 @@ export interface SerializableOrder {
   size: string;
   verseSize: number;
   occasion: string;
+  title?: string;
   price: number;
   available: boolean;
   status: Order["status"];
@@ -268,6 +270,7 @@ function deserializePaperColor(color: SerializablePaperColor): PaperColor {
 function serializeOrder(order: Order): SerializableOrder {
   return {
     id: order.id,
+    displayId: order.displayId,
     orderTime: order.orderTime,
     quantity: order.quantity,
     leadTime: order.leadTime,
@@ -275,6 +278,7 @@ function serializeOrder(order: Order): SerializableOrder {
     size: order.size,
     verseSize: order.verseSize,
     occasion: order.occasion,
+    title: order.title,
     price: order.price,
     available: order.available,
     status: order.status,
@@ -298,6 +302,7 @@ function deserializeOrder(
 
   return {
     id: order.id,
+    displayId: order.displayId,
     orderTime: order.orderTime,
     quantity: order.quantity,
     leadTime: order.leadTime,
@@ -305,6 +310,7 @@ function deserializeOrder(
     size: order.size,
     verseSize: order.verseSize,
     occasion: order.occasion,
+    title: order.title,
     price: order.price,
     available: order.available,
     status: order.status,

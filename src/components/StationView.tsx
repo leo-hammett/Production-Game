@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ProductionSchedule } from "./ProductionSchedule";
+import { TitleCenteringTool } from "./TitleCenteringTool";
 import {
   gameState,
   type Order,
@@ -783,6 +784,17 @@ export function StationView({
               </div>
             </div>
           </div>
+
+          {(stationNumber === 1 || stationNumber === 2) && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                Title Centering Tool
+              </h3>
+              <div className="bg-gray-50 rounded p-3">
+                <TitleCenteringTool />
+              </div>
+            </div>
+          )}
 
           <div className="mb-6">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">

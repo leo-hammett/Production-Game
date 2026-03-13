@@ -136,6 +136,7 @@ export interface OrderStationTasks {
 
 export interface Order {
   id: string;
+  displayId?: string; // User-editable display ID for easier identification
   orderTime: number; // timestamp when order was placed
   quantity: number;
   leadTime: number; // -1 means infinite
@@ -143,6 +144,7 @@ export interface Order {
   size: string; // A5, A6, A7
   verseSize: number;
   occasion: string;
+  title?: string; // Title text for stationery centering
   price: number;
   available: boolean;
   status: OrderStatus;

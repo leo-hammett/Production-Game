@@ -534,6 +534,9 @@ export function OperationsManagementView({
                       Occasion
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Title
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Price
                     </th>
                     <th className="px-2 py-1 text-center text-xs whitespace-nowrap">
@@ -581,9 +584,15 @@ export function OperationsManagementView({
                         </div>
                       </td>
                       <td className="px-2 py-1">
-                        <span className="font-mono text-xs text-gray-500">
-                          {order.id.slice(-6)}
-                        </span>
+                        <input
+                          type="text"
+                          value={order.displayId || order.id.slice(-6)}
+                          onChange={(e) =>
+                            updateOrderField(order.id, "displayId", e.target.value)
+                          }
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8 font-mono"
+                          placeholder={order.id.slice(-6)}
+                        />
                       </td>
                       <td className="px-2 py-1">
                         <input
@@ -784,6 +793,17 @@ export function OperationsManagementView({
                         />
                       </td>
                       <td className="px-2 py-1">
+                        <input
+                          type="text"
+                          value={order.title || ""}
+                          onChange={(e) =>
+                            updateOrderField(order.id, "title", e.target.value)
+                          }
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8"
+                          placeholder="Title..."
+                        />
+                      </td>
+                      <td className="px-2 py-1">
                         <div className="flex items-center">
                           <span className="mr-0.5 text-gray-500">£</span>
                           <input
@@ -871,6 +891,9 @@ export function OperationsManagementView({
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Occasion
+                    </th>
+                    <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
+                      Title
                     </th>
                     <th className="px-2 py-1 text-left text-xs whitespace-nowrap">
                       Price
