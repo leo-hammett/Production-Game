@@ -89,6 +89,8 @@ export function useAmplifySharedGameState(
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistBlockedUntilRef = useRef(0);
   const lastFailedSerializedRef = useRef<string | null>(null);
+  const lastObservedRemoteRevisionRef = useRef(0);
+  const lastObservedRemoteSerializedRef = useRef<string | null>(null);
   const deferredRemoteStateRef = useRef<{
     nextState: DeserializedSharedGameState;
     serialized: string | null;
@@ -198,8 +200,34 @@ export function useAmplifySharedGameState(
       const existing = await sharedGameStateModel.get({
         teamId: snapshot.teamId,
       });
+      const existingSerialized =
+        typeof existing.data?.snapshot === "string"
+          ? existing.data.snapshot
+          : existing.data?.snapshot
+            ? JSON.stringify(existing.data.snapshot)
+            : null;
+      const existingRevision = existing.data?.revision ?? 0;
 
-      const revision = (existing.data?.revision ?? 0) + 1;
+      if (existingSerialized === serialized) {
+        lastSavedRef.current = serialized;
+        lastObservedRemoteRevisionRef.current = existingRevision;
+        lastObservedRemoteSerializedRef.current = serialized;
+        persistBlockedUntilRef.current = 0;
+        lastFailedSerializedRef.current = null;
+        setSyncStatus({
+          state: bindings.isSyncPaused ? "paused" : "synced",
+          message: bindings.isSyncPaused
+            ? `Outbound changes already synced for ${snapshot.teamId}`
+            : `Connected to ${snapshot.teamId}`,
+        });
+        return;
+      }
+
+      if (existingRevision !== lastObservedRemoteRevisionRef.current) {
+        throw new Error("Remote state changed since last sync. Reload or resume before forcing outbound changes.");
+      }
+
+      const revision = existingRevision + 1;
       const payload = {
         teamId: snapshot.teamId,
         snapshot: JSON.stringify(snapshot),
@@ -219,6 +247,8 @@ export function useAmplifySharedGameState(
       }
 
       lastSavedRef.current = serialized;
+      lastObservedRemoteRevisionRef.current = revision;
+      lastObservedRemoteSerializedRef.current = serialized;
       persistBlockedUntilRef.current = 0;
       lastFailedSerializedRef.current = null;
       setSyncStatus({
@@ -286,6 +316,8 @@ export function useAmplifySharedGameState(
 
         const record = items[0];
         if (!record?.snapshot) {
+          lastObservedRemoteRevisionRef.current = 0;
+          lastObservedRemoteSerializedRef.current = null;
           applyLocalState(createEmptySharedGameState(bindings.teamId), {
             skipNextPersist: false,
             serialized: null,
@@ -304,6 +336,8 @@ export function useAmplifySharedGameState(
             currentSchedule: nextState.currentSchedule,
           }),
         );
+        lastObservedRemoteRevisionRef.current = record.revision ?? 0;
+        lastObservedRemoteSerializedRef.current = serialized;
 
         if (shouldDeferIncomingSyncRef.current || isSyncPausedRef.current) {
           deferredRemoteStateRef.current = {
@@ -393,12 +427,21 @@ export function useAmplifySharedGameState(
       saveTimerRef.current = null;
     }
     deferredRemoteStateRef.current = null;
+    const { snapshot, serialized } = buildCurrentSnapshot();
+
+    if (lastSavedRef.current === serialized) {
+      localChangesWhilePausedRef.current = false;
+      setSyncStatus({
+        state: "paused",
+        message: `No local changes to send. Sync still paused for ${bindings.teamId}`,
+      });
+      return;
+    }
+
     setSyncStatus({
       state: "syncing",
       message: `Forcing outbound changes for ${bindings.teamId}`,
     });
-
-    const { snapshot, serialized } = buildCurrentSnapshot();
 
     void persistSnapshot(snapshot, serialized)
       .then(() => {
@@ -423,8 +466,9 @@ export function useAmplifySharedGameState(
         persistBlockedUntilRef.current = Date.now() + PERSIST_FAILURE_BACKOFF_MS;
         lastFailedSerializedRef.current = serialized;
         setSyncStatus({
-          state: "error",
-          message: "Manual sync failed",
+          state: bindings.isSyncPaused ? "paused" : "error",
+          message:
+            error instanceof Error ? error.message : "Manual sync failed",
         });
       });
   }, [
@@ -481,7 +525,10 @@ export function useAmplifySharedGameState(
         lastFailedSerializedRef.current = serialized;
         setSyncStatus({
           state: "error",
-          message: "Amplify sync save failed; retrying later",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Amplify sync save failed; retrying later",
         });
       });
       localChangesWhilePausedRef.current = false;
