@@ -1398,10 +1398,11 @@ function App() {
           .map((orderId) => {
             const order = orderMap.get(orderId);
             if (!order) {
-              return orderId.slice(-6);
+              return `#${orderId.slice(-6)}`;
             }
 
-            return `${order.quantity}x ${order.occasion || "Cards"} (${order.paperColor.code.toUpperCase()})`;
+            const displayId = order.displayId || order.id.slice(-6);
+            return `#${displayId}: ${order.quantity}x ${order.occasion || "Cards"} (${order.paperColor.code.toUpperCase()}) £${order.price.toFixed(2)}`;
           })
           .join(" -> ")
       : "No schedulable orders";
@@ -1426,9 +1427,10 @@ function App() {
       <ol className="mt-2 space-y-1">
         {schedule.orderIds.map((orderId, index) => {
           const order = orderMap.get(orderId);
+          const displayId = order?.displayId || order?.id.slice(-6) || orderId.slice(-6);
           const label = order
-            ? `${order.quantity}x ${order.occasion || "Cards"} (${order.paperColor.code.toUpperCase()})`
-            : orderId.slice(-6);
+            ? `#${displayId}: ${order.quantity}x ${order.occasion || "Cards"} (${order.paperColor.code.toUpperCase()}) £${order.price.toFixed(2)}`
+            : `#${orderId.slice(-6)}`;
 
           return (
             <li
