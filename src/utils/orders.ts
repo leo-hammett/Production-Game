@@ -263,18 +263,20 @@ export const reorderOrders = (
 export const addOrder = (): Order => {
   // Default to white paper
   const defaultColor = PAPER_COLOR_MAP.get("w") || PAPER_COLORS[0];
+  const orderId = Date.now().toString();
   
   const newOrder: Order = {
-    id: Date.now().toString(),
+    id: orderId,
+    displayId: orderId.slice(-6),
     orderTime: Date.now(),
-    quantity: 50,
-    leadTime: 7,
+    quantity: 12,
+    leadTime: 20,
     paperColor: defaultColor,
     size: "A5",
     verseSize: 4,
     occasion: "",
     title: "",
-    price: 2.0,
+    price: 200,
     available: true,
     status: "passive",
     progress: 0,

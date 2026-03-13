@@ -371,7 +371,7 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const dividerRef = useRef<HTMLDivElement>(null);
 
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<Order[]>(() => [...gameState.getOrders()]);
   const [teamId, setTeamId] = useState(() => {
     if (typeof window === "undefined") {
       return DEFAULT_TEAM_ID;
@@ -409,19 +409,15 @@ function App() {
   const [clearedSuggestedPaperPlanId, setClearedSuggestedPaperPlanId] =
     useState<string | null>(null);
 
-  // Inventory Management State - the game starts with nothing, then we will manually buy
-  const [paperInventory, setPaperInventory] = useState<PaperInventory>({
-    w: 0,
-    g: 0,
-    p: 0,
-    y: 0,
-    b: 0,
-    s: 0,
-    [ENVELOPE_CODE]: 0,
-  });
+  // Inventory Management State
+  const [paperInventory, setPaperInventory] = useState<PaperInventory>(() => ({
+    ...gameState.getPaperInventory(),
+  }));
   const trackedInventoryItems = [...PAPER_COLORS, ENVELOPE_ITEM];
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [cash, setCash] = useState(0); // Game starts with no cash
+  const [transactions, setTransactions] = useState<Transaction[]>(() => [
+    ...gameState.getTransactions(),
+  ]);
+  const [cash, setCash] = useState(() => gameState.getCash());
   const initialParameters = gameState.getParameters();
   const [safetyStock, setSafetyStock] = useState(initialParameters.safetyStock);
   const [workstationSpeed, setWorkstationSpeed] = useState(
@@ -1613,11 +1609,11 @@ function App() {
 
     gameState.reset();
     const resetParameters = gameState.getParameters();
-    setOrders([]);
-    setPaperInventory({ w: 0, g: 0, p: 0, y: 0, b: 0, s: 0, [ENVELOPE_CODE]: 0 });
-    setTransactions([]);
-    setCash(0);
-    setScheduleOrderIds([]);
+    setOrders([...gameState.getOrders()]);
+    setPaperInventory({ ...gameState.getPaperInventory() });
+    setTransactions([...gameState.getTransactions()]);
+    setCash(gameState.getCash());
+    setScheduleOrderIds([...gameState.getCurrentSchedule().orderIds]);
     setSchedulerSuggestions(null);
     setPlanForecastSummaries({
       currentPlan: null,
@@ -1741,13 +1737,7 @@ function App() {
               </span>
             </div>
             <div className="col-span-2 flex items-center gap-2 xl:col-span-5">
-              <span className="text-xs text-gray-400">Cash / Inventory:</span>
-              <span className="text-xs text-gray-200">
-                Cash {formatCurrency(financialMetrics.cash)} | Tracked{" "}
-                {formatCurrency(financialMetrics.trackedInventoryValue)} |
-                Other {formatCurrency(financialMetrics.otherInventoryValue)} |
-                Total {formatCurrency(financialMetrics.totalInventoryValue)}
-              </span>
+              {/* Cash/Inventory info removed for cleaner header */}
             </div>
           </div>
           
@@ -1917,9 +1907,19 @@ function App() {
                       className={`border-b hover:bg-gray-50 ${getRowColorClass(order)}`}
                     >
                       <td className="px-2 py-1">
-                        <span className="font-mono text-xs text-gray-500">
-                          {order.id.slice(-6)}
-                        </span>
+                        <input
+                          type="text"
+                          value={order.displayId ?? order.id.slice(-6)}
+                          onChange={(e) =>
+                            updateOrderField(
+                              order.id,
+                              "displayId",
+                              e.target.value,
+                            )
+                          }
+                          className="w-full px-1 py-1.5 border rounded text-xs h-8 font-mono"
+                          placeholder={order.id.slice(-6)}
+                        />
                       </td>
                       <td className="px-2 py-1">
                         <input
@@ -2515,6 +2515,125 @@ function App() {
                   Delivery / pending time is {paperDeliverySeconds} seconds ({paperDeliverySeconds / 60} minutes). Buying cooldown is{" "}
                   {buyingCooldown / 60} minutes. Suggested schedule timing now
                   includes procurement delay when extra paper must be bought.
+                </div>
+              </div>
+
+              {/* Scheduler Suggestions - Now right after Required Stock */}
+              <div className="mb-4">
+                <h3 className="text-xs font-semibold text-gray-700 mb-2">
+                  Scheduler Suggestions
+                </h3>
+                <div className="space-y-2">
+                  <div className="rounded border border-green-200 bg-green-50 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-green-800">
+                          Best Plan
+                        </div>
+                        <div className="text-[11px] text-green-700">
+                          {schedulerSuggestions?.bestSuggestion
+                            ? describeSchedule(schedulerSuggestions.bestSuggestion)
+                            : "No schedulable plan available yet."}
+                        </div>
+                        {renderSchedulePriorityList(
+                          schedulerSuggestions?.bestSuggestion ?? null,
+                          "green",
+                        )}
+                      </div>
+                      <div className="text-right text-[11px] text-green-900">
+                        <div>
+                          Profit: £
+                          {schedulerSuggestions?.bestSuggestion?.expectedProfit.toFixed(2) ??
+                            "0.00"}
+                        </div>
+                        <div>
+                          Busy:{" "}
+                          {formatDurationCompact(
+                            schedulerSuggestions?.bestSuggestion?.expectedBusyMs ?? 0,
+                          )}
+                        </div>
+                        <div>
+                          Rate:{" "}
+                          {formatProfitPerSecond(
+                            schedulerSuggestions?.bestSuggestion?.profitPerSecond ?? 0,
+                          )}
+                        </div>
+                        <div>
+                          Plan Success:{" "}
+                          {formatSuccessRate(
+                            schedulerSuggestions?.bestSuggestion ?? null,
+                          )}
+                        </div>
+                        <div>
+                          Expected Total Profit:{" "}
+                          {formatCurrency(
+                            planForecastSummaries.bestPlan?.expectedTotalProfit ?? 0,
+                          )}
+                        </div>
+                        <div>
+                          Idle £/min:{" "}
+                          {formatCurrency(
+                            planForecastSummaries.bestPlan?.expectedProfitPerIdleMinute ?? 0,
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-gray-200 bg-gray-50 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[11px] text-gray-700">
+                        <div className="font-semibold text-gray-800">Current Plan</div>
+                        <div>{describeSchedule(schedulerSuggestions?.currentSchedule ?? null)}</div>
+                        {renderSchedulePriorityList(
+                          schedulerSuggestions?.currentSchedule ?? null,
+                        )}
+                      </div>
+                      <div className="text-right text-[11px] text-gray-700">
+                        <div>
+                          Profit: £
+                          {schedulerSuggestions?.currentSchedule?.expectedProfit.toFixed(2) ??
+                            "0.00"}
+                        </div>
+                        <div>
+                          Busy:{" "}
+                          {formatDurationCompact(
+                            schedulerSuggestions?.currentSchedule?.expectedBusyMs ?? 0,
+                          )}
+                        </div>
+                        <div>
+                          Rate:{" "}
+                          {formatProfitPerSecond(
+                            schedulerSuggestions?.currentSchedule?.profitPerSecond ?? 0,
+                          )}
+                        </div>
+                        <div>
+                          Plan Success:{" "}
+                          {formatSuccessRate(
+                            schedulerSuggestions?.currentSchedule ?? null,
+                          )}
+                        </div>
+                        <div>
+                          Expected Total Profit:{" "}
+                          {formatCurrency(
+                            planForecastSummaries.currentPlan?.expectedTotalProfit ?? 0,
+                          )}
+                        </div>
+                        <div>
+                          Idle £/min:{" "}
+                          {formatCurrency(
+                            planForecastSummaries.currentPlan?.expectedProfitPerIdleMinute ?? 0,
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {schedulerSuggestions?.warning && (
+                    <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                      {schedulerSuggestions.warning}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -3490,164 +3609,47 @@ function App() {
         </div>
       )}
 
-      {/* Scheduler Suggestions - Moved to bottom */}
-      {currentView === "operations" && (
+      {/* Top Alternatives - Moved to bottom */}
+      {currentView === "operations" && schedulerSuggestions?.suggestions.length > 0 && (
         <div className="bg-white border-t border-gray-300">
           <div className="p-2">
-            <h3 className="text-xs font-semibold text-gray-700 mb-2">
-              Scheduler Suggestions
-            </h3>
-            <div className="space-y-2">
-              <div className="rounded border border-green-200 bg-green-50 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-xs font-semibold text-green-800">
-                      Best Plan
-                    </div>
-                    <div className="text-[11px] text-green-700">
-                      {schedulerSuggestions?.bestSuggestion
-                        ? describeSchedule(schedulerSuggestions.bestSuggestion)
-                        : "No schedulable plan available yet."}
-                    </div>
-                    {renderSchedulePriorityList(
-                      schedulerSuggestions?.bestSuggestion ?? null,
-                      "green",
-                    )}
-                  </div>
-                  <div className="text-right text-[11px] text-green-900">
-                    <div>
-                      Profit: £
-                      {schedulerSuggestions?.bestSuggestion?.expectedProfit.toFixed(2) ??
-                        "0.00"}
-                    </div>
-                    <div>
-                      Busy:{" "}
-                      {formatDurationCompact(
-                        schedulerSuggestions?.bestSuggestion?.expectedBusyMs ?? 0,
-                      )}
-                    </div>
-                    <div>
-                      Rate:{" "}
-                      {formatProfitPerSecond(
-                        schedulerSuggestions?.bestSuggestion?.profitPerSecond ?? 0,
-                      )}
-                    </div>
-                    <div>
-                      Plan Success:{" "}
-                      {formatSuccessRate(
-                        schedulerSuggestions?.bestSuggestion ?? null,
-                      )}
-                    </div>
-                    <div>
-                      Expected Total Profit:{" "}
-                      {formatCurrency(
-                        planForecastSummaries.bestPlan?.expectedTotalProfit ?? 0,
-                      )}
-                    </div>
-                    <div>
-                      Idle £/min:{" "}
-                      {formatCurrency(
-                        planForecastSummaries.bestPlan?.expectedProfitPerIdleMinute ?? 0,
-                      )}
-                    </div>
-                  </div>
+            <div className="rounded border border-gray-200 bg-white p-2">
+              <div className="mb-1 flex items-center justify-between">
+                <div className="text-xs font-semibold text-gray-800">
+                  Top Alternatives
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  {schedulerSuggestions?.evaluatedCandidateCount ?? 0} plans
+                  checked
                 </div>
               </div>
-
-              <div className="rounded border border-gray-200 bg-gray-50 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[11px] text-gray-700">
-                    <div className="font-semibold text-gray-800">Current Plan</div>
-                    <div>{describeSchedule(schedulerSuggestions?.currentSchedule ?? null)}</div>
-                    {renderSchedulePriorityList(
-                      schedulerSuggestions?.currentSchedule ?? null,
-                    )}
-                  </div>
-                  <div className="text-right text-[11px] text-gray-700">
-                    <div>
-                      Profit: £
-                      {schedulerSuggestions?.currentSchedule?.expectedProfit.toFixed(2) ??
-                        "0.00"}
-                    </div>
-                    <div>
-                      Busy:{" "}
-                      {formatDurationCompact(
-                        schedulerSuggestions?.currentSchedule?.expectedBusyMs ?? 0,
-                      )}
-                    </div>
-                    <div>
-                      Rate:{" "}
-                      {formatProfitPerSecond(
-                        schedulerSuggestions?.currentSchedule?.profitPerSecond ?? 0,
-                      )}
-                    </div>
-                    <div>
-                      Plan Success:{" "}
-                      {formatSuccessRate(
-                        schedulerSuggestions?.currentSchedule ?? null,
-                      )}
-                    </div>
-                    <div>
-                      Expected Total Profit:{" "}
-                      {formatCurrency(
-                        planForecastSummaries.currentPlan?.expectedTotalProfit ?? 0,
-                      )}
-                    </div>
-                    <div>
-                      Idle £/min:{" "}
-                      {formatCurrency(
-                        planForecastSummaries.currentPlan?.expectedProfitPerIdleMinute ?? 0,
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded border border-gray-200 bg-white p-2">
-                <div className="mb-1 flex items-center justify-between">
-                  <div className="text-xs font-semibold text-gray-800">
-                    Top Alternatives
-                  </div>
-                  <div className="text-[11px] text-gray-500">
-                    {schedulerSuggestions?.evaluatedCandidateCount ?? 0} plans
-                    checked
-                  </div>
-                </div>
-                {schedulerSuggestions?.suggestions.length ? (
-                  <div className="space-y-1">
-                    {schedulerSuggestions.suggestions.slice(0, 3).map((schedule) => (
-                      <div
-                        key={schedule.id}
-                        className="rounded border border-gray-200 bg-gray-50 p-2"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-[11px] text-gray-800">
-                            <span className="font-semibold">#{schedule.rank}</span>{" "}
-                            {describeSchedule(schedule)}
-                          </div>
-                          <div className="text-right text-[11px] text-gray-600">
-                            <div>{formatProfitPerSecond(schedule.profitPerSecond)}</div>
-                            <div>£{schedule.expectedProfit.toFixed(2)}</div>
-                          </div>
+              {schedulerSuggestions?.suggestions.length ? (
+                <div className="space-y-1">
+                  {schedulerSuggestions.suggestions.slice(0, 3).map((schedule) => (
+                    <div
+                      key={schedule.id}
+                      className="rounded border border-gray-200 bg-gray-50 p-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[11px] text-gray-800">
+                          <span className="font-semibold">#{schedule.rank}</span>{" "}
+                          {describeSchedule(schedule)}
                         </div>
-                        {renderSchedulePriorityList(schedule)}
+                        <div className="text-right text-[11px] text-gray-600">
+                          <div>{formatProfitPerSecond(schedule.profitPerSecond)}</div>
+                          <div>£{schedule.expectedProfit.toFixed(2)}</div>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-[11px] text-gray-500">
-                    No candidate schedules available.
-                  </div>
-                )}
-              </div>
-
-              {schedulerSuggestions?.warning && (
-                <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
-                  {schedulerSuggestions.warning}
+                      {renderSchedulePriorityList(schedule)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[11px] text-gray-500">
+                  No candidate schedules available.
                 </div>
               )}
             </div>
-
           </div>
         </div>
       )}

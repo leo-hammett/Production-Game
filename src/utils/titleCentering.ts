@@ -18,6 +18,7 @@ export interface CenteredLine {
   lineNumber: number;
   text: string;
   startPosition: number;
+  endPosition: number;
 }
 
 export interface CenteringResult {
@@ -44,10 +45,11 @@ export function calculateStartPosition(textLength: number, maxCapacity: number):
   
   // Center by placing half the empty spaces before the text
   const spacesBeforeText = emptySpaces / 2;
-  
-  // Starting position is 1 + spaces before text
-  const startPosition = 1 + spacesBeforeText;
-  
+
+  // Odd-length titles sit on whole-number marks, even-length titles on half marks.
+  const firstUsablePosition = textLength % 2 === 0 ? 1.5 : 1;
+  const startPosition = firstUsablePosition + spacesBeforeText;
+
   return startPosition;
 }
 
@@ -95,6 +97,7 @@ export function centerTitle(title: string, paperSize: PaperSize): CenteringResul
       lineNumber,
       text: lineText,
       startPosition,
+      endPosition: startPosition + lineText.length - 1,
     });
 
     lineNumber++;

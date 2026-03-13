@@ -58,6 +58,24 @@ export const ENVELOPE_ITEM = new PaperColor(
   ENVELOPE_PRICE,
 );
 
+export function createDefaultGameParameters(): GameParameters {
+  return {
+    workstationSpeed: 1.0,
+    stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
+    safetyStock: 12,
+    buyingCooldown: BUYING_COOLDOWN_SECONDS,
+    paperDeliverySeconds: PAPER_DELIVERY_SECONDS,
+    buyingCooldownEndTime: null,
+    sellMarkdown: 0.7,
+    failureFineRatio: 0.3,
+    colourLoveMultiplier: 1.0,
+    whiteLoveMultiplier: 1.0,
+    standardTimeRatio: STANDARD_TIME_RATIO,
+    greedometer: 0,
+    forecastSpeed: 1.0,
+  };
+}
+
 export type TransactionCategory =
   | "manual_cash"
   | "order_income"
@@ -98,6 +116,235 @@ export interface Transaction {
   financeBucket?: TransactionFinanceBucket;
   metricContribution?: number;
   inventoryValueDelta?: number;
+}
+
+interface StartingTransactionSeed {
+  amount: number;
+  reason: string;
+  type: "paper" | "inventory";
+  paperColor?: string;
+  paperQuantity?: number;
+  metadata: TransactionMetadata;
+}
+
+const STARTING_TRACKED_INVENTORY: PaperInventory = {
+  w: 10,
+  g: 10,
+  p: 10,
+  y: 10,
+  b: 10,
+  s: 10,
+  [ENVELOPE_CODE]: 10,
+};
+
+const STARTING_TRANSACTION_SEEDS: StartingTransactionSeed[] = [
+  {
+    amount: -300,
+    reason: 'Starting stock: 12" Ruler',
+    type: "inventory",
+    metadata: {
+      category: "inventory_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 300,
+      inventoryValueDelta: 300,
+    },
+  },
+  {
+    amount: -400,
+    reason: "Starting stock: 5-mm stencil",
+    type: "inventory",
+    metadata: {
+      category: "inventory_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 400,
+      inventoryValueDelta: 400,
+    },
+  },
+  {
+    amount: -500,
+    reason: "Starting stock: 10-mm stencil",
+    type: "inventory",
+    metadata: {
+      category: "inventory_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 500,
+      inventoryValueDelta: 500,
+    },
+  },
+  {
+    amount: -300,
+    reason: "Starting stock: Pen",
+    type: "inventory",
+    metadata: {
+      category: "inventory_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 300,
+      inventoryValueDelta: 300,
+    },
+  },
+  {
+    amount: -100,
+    reason: "Starting stock: Pencil",
+    type: "inventory",
+    metadata: {
+      category: "inventory_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 100,
+      inventoryValueDelta: 100,
+    },
+  },
+  {
+    amount: -300,
+    reason: "Starting stock: Rubber",
+    type: "inventory",
+    metadata: {
+      category: "inventory_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 300,
+      inventoryValueDelta: 300,
+    },
+  },
+  {
+    amount: -100,
+    reason: "Starting stock: 10 Envelopes",
+    type: "paper",
+    paperColor: ENVELOPE_CODE,
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 100,
+      inventoryValueDelta: 0,
+    },
+  },
+  {
+    amount: -100,
+    reason: "Starting stock: 10 White sheets",
+    type: "paper",
+    paperColor: "w",
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 100,
+      inventoryValueDelta: 0,
+    },
+  },
+  {
+    amount: -200,
+    reason: "Starting stock: 10 Salmon sheets",
+    type: "paper",
+    paperColor: "s",
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 200,
+      inventoryValueDelta: 0,
+    },
+  },
+  {
+    amount: -200,
+    reason: "Starting stock: 10 Pink sheets",
+    type: "paper",
+    paperColor: "p",
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 200,
+      inventoryValueDelta: 0,
+    },
+  },
+  {
+    amount: -200,
+    reason: "Starting stock: 10 Blue sheets",
+    type: "paper",
+    paperColor: "b",
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 200,
+      inventoryValueDelta: 0,
+    },
+  },
+  {
+    amount: -200,
+    reason: "Starting stock: 10 Green sheets",
+    type: "paper",
+    paperColor: "g",
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 200,
+      inventoryValueDelta: 0,
+    },
+  },
+  {
+    amount: -200,
+    reason: "Starting stock: 10 Yellow sheets",
+    type: "paper",
+    paperColor: "y",
+    paperQuantity: 10,
+    metadata: {
+      category: "paper_purchase",
+      financeBucket: "cost_of_sales",
+      metricContribution: 200,
+      inventoryValueDelta: 0,
+    },
+  },
+];
+
+type TransactionFactory = (
+  amount: number,
+  reason: string,
+  type?: "cash" | "paper" | "inventory",
+  paperColor?: string,
+  paperQuantity?: number,
+  orderId?: string,
+  pending?: boolean,
+  deliveryTime?: number,
+  metadata?: TransactionMetadata,
+) => Transaction;
+
+export function createStartingPaperInventory(): PaperInventory {
+  return { ...STARTING_TRACKED_INVENTORY };
+}
+
+export function createStartingTransactions(
+  createTransaction: TransactionFactory,
+): Transaction[] {
+  return STARTING_TRANSACTION_SEEDS.map((seed) =>
+    createTransaction(
+      seed.amount,
+      seed.reason,
+      seed.type,
+      seed.paperColor,
+      seed.paperQuantity,
+      undefined,
+      false,
+      undefined,
+      seed.metadata,
+    ),
+  );
+}
+
+export function createStartingInventoryState(
+  createTransaction: TransactionFactory,
+): {
+  paperInventory: PaperInventory;
+  transactions: Transaction[];
+  cash: number;
+} {
+  const transactions = createStartingTransactions(createTransaction);
+
+  return {
+    paperInventory: createStartingPaperInventory(),
+    transactions,
+    cash: transactions.reduce((total, transaction) => total + transaction.amount, 0),
+  };
 }
 
 // Order-related types (moved from orders.ts to avoid circular dependency)
@@ -209,35 +456,37 @@ class GameStateManager {
     const paperColorMap = new Map<string, PaperColor>(
       paperColors.map((color) => [color.code, color]),
     );
+    const startingInventoryState = createStartingInventoryState(
+      (
+        amount,
+        reason,
+        type,
+        paperColor,
+        paperQuantity,
+        orderId,
+        pending,
+        deliveryTime,
+        metadata,
+      ) =>
+        this.createTransaction(
+          amount,
+          reason,
+          type,
+          paperColor,
+          paperQuantity,
+          orderId,
+          pending,
+          deliveryTime,
+          metadata,
+        ),
+    );
 
     this.state = {
       orders: [],
-      paperInventory: {
-        w: 0,
-        g: 0,
-        p: 0,
-        y: 0,
-        b: 0,
-        s: 0,
-        [ENVELOPE_CODE]: 0,
-      },
-      transactions: [],
-      cash: 0,
-      parameters: {
-        workstationSpeed: 1.0,
-        stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
-        safetyStock: 12,
-        buyingCooldown: BUYING_COOLDOWN_SECONDS,
-        paperDeliverySeconds: PAPER_DELIVERY_SECONDS,
-        buyingCooldownEndTime: null,
-        sellMarkdown: 0.7,
-        failureFineRatio: 0.3,
-        colourLoveMultiplier: 1.0,
-        whiteLoveMultiplier: 1.0,
-        standardTimeRatio: STANDARD_TIME_RATIO,
-        greedometer: 0,
-        forecastSpeed: 1.0,
-      },
+      paperInventory: startingInventoryState.paperInventory,
+      transactions: startingInventoryState.transactions,
+      cash: startingInventoryState.cash,
+      parameters: createDefaultGameParameters(),
       stationManager: new StationManager(),
       currentSchedule: new Schedule("current", []),
       teamId: "TEAM-001", // Default team ID
@@ -670,35 +919,37 @@ class GameStateManager {
     const paperColorMap = new Map<string, PaperColor>(
       paperColors.map((color) => [color.code, color]),
     );
+    const startingInventoryState = createStartingInventoryState(
+      (
+        amount,
+        reason,
+        type,
+        paperColor,
+        paperQuantity,
+        orderId,
+        pending,
+        deliveryTime,
+        metadata,
+      ) =>
+        this.createTransaction(
+          amount,
+          reason,
+          type,
+          paperColor,
+          paperQuantity,
+          orderId,
+          pending,
+          deliveryTime,
+          metadata,
+        ),
+    );
 
     this.state = {
       orders: [],
-      paperInventory: {
-        w: 0,
-        g: 0,
-        p: 0,
-        y: 0,
-        b: 0,
-        s: 0,
-        [ENVELOPE_CODE]: 0,
-      },
-      transactions: [],
-      cash: 0,
-      parameters: {
-        workstationSpeed: 1.0,
-        stationSpeedMultipliers: { ...DEFAULT_STATION_SPEED_MULTIPLIERS },
-        safetyStock: 12,
-        buyingCooldown: BUYING_COOLDOWN_SECONDS,
-        paperDeliverySeconds: PAPER_DELIVERY_SECONDS,
-        buyingCooldownEndTime: null,
-        sellMarkdown: 0.7,
-        failureFineRatio: 0.3,
-        colourLoveMultiplier: 1.0,
-        whiteLoveMultiplier: 1.0,
-        standardTimeRatio: STANDARD_TIME_RATIO,
-        greedometer: 0,
-        forecastSpeed: 1.0,
-      },
+      paperInventory: startingInventoryState.paperInventory,
+      transactions: startingInventoryState.transactions,
+      cash: startingInventoryState.cash,
+      parameters: createDefaultGameParameters(),
       stationManager: new StationManager(),
       currentSchedule: new Schedule("current", []),
       teamId: "TEAM-001", // Default team ID

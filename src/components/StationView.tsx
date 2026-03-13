@@ -137,6 +137,7 @@ export function StationView({
   const [isDragging, setIsDragging] = useState(false);
   const [groupOrders, setGroupOrders] = useState(true);
   const dividerRef = useRef<HTMLDivElement>(null);
+  const previousOrderIdRef = useRef<string | null>(null);
 
   const scheduledOrders = getScheduledProductionOrders(orders, scheduleOrderIds);
   
@@ -181,6 +182,52 @@ export function StationView({
     currentTime,
   );
 
+  // Resolve the current order ID early - prefer user selection if order exists in queue
+  const resolvedCurrentOrderId = (() => {
+    // If user has selected an order and it's still in the queue, keep it selected
+    if (currentOrderId && stationQueue.some((order) => order.id === currentOrderId)) {
+      return currentOrderId;
+    }
+    // Otherwise default to first order in queue
+    return stationQueue[0]?.id ?? null;
+  })();
+
+  // Handle order selection changes and ensure UI updates
+  useEffect(() => {
+    if (resolvedCurrentOrderId !== previousOrderIdRef.current) {
+      previousOrderIdRef.current = resolvedCurrentOrderId;
+      
+      // Clear completed task notification when switching orders
+      if (completedTask && completedTask.orderId !== resolvedCurrentOrderId) {
+        setCompletedTask(null);
+      }
+      
+      // Force re-render of dependent components by ensuring state consistency
+      // The currentOrder and all derived values will automatically update
+      // because they depend on resolvedCurrentOrderId
+    }
+  }, [resolvedCurrentOrderId, completedTask]);
+
+  // Validate current selection when orders or schedule changes
+  useEffect(() => {
+    if (currentOrderId) {
+      const orderStillExists = orders.find(o => o.id === currentOrderId);
+      const orderInSchedule = scheduleOrderIds.includes(currentOrderId);
+      
+      if (!orderStillExists) {
+        // If the currently selected order no longer exists, clear selection
+        setCurrentOrderId(null);
+      } else if (!orderInSchedule && scheduleOrderIds.length > 0) {
+        // If order is not in the current schedule, check if it's still available
+        const orderInQueue = stationQueue.find(o => o.id === currentOrderId);
+        if (!orderInQueue) {
+          // Order is not in station queue anymore, clear selection
+          setCurrentOrderId(null);
+        }
+      }
+    }
+  }, [orders, currentOrderId, scheduleOrderIds, stationQueue]);
+
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
       if (!isDragging) {
@@ -210,10 +257,6 @@ export function StationView({
     };
   }, [isDragging]);
 
-  const resolvedCurrentOrderId =
-    currentOrderId && stationQueue.some((order) => order.id === currentOrderId)
-      ? currentOrderId
-      : stationQueue[0]?.id ?? null;
   const currentOrder = orders.find((order) => order.id === resolvedCurrentOrderId);
   const currentTask = currentOrder
     ? getOrderStationTask(currentOrder, stationIndex)
@@ -226,6 +269,7 @@ export function StationView({
     ? currentOrder.selectedVerse ||
       getVerseText(currentOrder.occasion, currentOrder.verseSize)
     : undefined;
+  const currentOrderLabel = currentOrder?.displayId ?? currentOrder?.id.slice(-6) ?? "";
   const pipelineProgressPercent =
     currentOrder && currentOrder.progress > 0
       ? Math.min((currentOrder.progress / 3) * 100, 100)
@@ -539,86 +583,76 @@ export function StationView({
         </div>
 
         <div className="p-4">
-          <div className="mb-6">
-            <h3 className="text-lg font-bold text-gray-700 mb-3">Current Job</h3>
-            <div className="bg-gray-50 rounded p-4 space-y-3">
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">Current Job</h3>
+            <div className="bg-gray-50 rounded p-2 space-y-1">
               {currentOrder ? (
                 <>
-                  <div className="flex justify-between text-base">
-                    <span className="text-gray-600 font-medium">Order ID:</span>
-                    <span className="font-bold text-lg">
-                      #{currentOrder.id.slice(-6)}
-                    </span>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Order ID:</span>
+                    <span className="font-bold">#{currentOrderLabel}</span>
                   </div>
-                  <div className="flex justify-between text-base">
-                    <span className="text-gray-600 font-medium">Quantity:</span>
-                    <span className="font-bold text-lg">
-                      {currentOrder.quantity} cards
-                    </span>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Title:</span>
+                    <span className="font-bold">{currentOrder.title || "Untitled"}</span>
                   </div>
-                  <div className="flex justify-between text-base">
-                    <span className="text-gray-600 font-medium">Sheet Size:</span>
-                    <span className="font-bold text-lg">{currentOrder.size}</span>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Quantity:</span>
+                    <span className="font-bold">{currentOrder.quantity} cards</span>
                   </div>
-                  <div className="flex justify-between text-base items-center">
-                    <span className="text-gray-600 font-medium">Paper Color:</span>
-                    <span
-                      className={`font-bold px-3 py-1 rounded text-base ${currentOrder.paperColor.cssClass}`}
-                    >
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Sheet Size:</span>
+                    <span className="font-bold">{currentOrder.size}</span>
+                  </div>
+                  <div className="flex justify-between text-sm items-center">
+                    <span className="text-gray-600">Paper Color:</span>
+                    <span className={`font-bold px-2 py-0.5 rounded text-sm ${currentOrder.paperColor.cssClass}`}>
                       {currentOrder.paperColor.name}
                     </span>
                   </div>
-                  <div className="flex justify-between text-base">
-                    <span className="text-gray-600 font-medium">Occasion:</span>
-                    <span className="font-bold text-lg">
-                      {currentOrder.occasion}
-                    </span>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Occasion:</span>
+                    <span className="font-bold">{currentOrder.occasion}</span>
                   </div>
-                  <div className="flex justify-between text-base">
-                    <span className="text-gray-600 font-medium">Team ID:</span>
-                    <span className="font-bold text-lg">
-                      {gameState.getTeamId()}
-                    </span>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Team ID:</span>
+                    <span className="font-bold">{gameState.getTeamId()}</span>
                   </div>
                   {stationNumber === 1 || stationNumber === 2 ? (
-                    <div>
-                      <span className="text-gray-600 font-medium">Verse:</span>
-                      <p className="mt-1 text-sm text-gray-900 whitespace-pre-line">
+                    <div className="text-sm">
+                      <span className="text-gray-600">Verse:</span>
+                      <p className="mt-0.5 text-xs text-gray-800 whitespace-pre-line">
                         {displayedVerse || `No verse for ${currentOrder.occasion}`}
                       </p>
                     </div>
                   ) : (
-                    <div className="rounded-xl border-2 border-gray-200 bg-white px-6 py-5 shadow-sm">
-                      <div className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">
-                        Verse
-                      </div>
-                      <p className="min-h-[10vh] whitespace-pre-line text-[clamp(1.375rem,3vw,3rem)] font-black leading-[0.92] tracking-[-0.02em] text-gray-900">
+                    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 mt-1">
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Verse</div>
+                      <p className="whitespace-pre-line text-lg font-bold leading-tight text-gray-900">
                         {displayedVerse || `No verse for ${currentOrder.occasion}`}
                       </p>
                     </div>
                   )}
-                  <div>
-                    <div className="mb-1 flex justify-between text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <div className="mt-2">
+                    <div className="flex justify-between text-xs text-gray-500 mb-0.5">
                       <span>Pipeline</span>
                       <span>{pipelineProgressPercent.toFixed(0)}%</span>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
                       <div
-                        className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
                         style={{ width: `${pipelineProgressPercent}%` }}
                       />
                     </div>
                   </div>
                   <div>
-                    <div className="mb-1 flex justify-between text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <div className="flex justify-between text-xs text-gray-500 mb-0.5">
                       <span>Station Expected</span>
-                      <span>
-                        {(currentProjection?.expectedProgress ?? 0).toFixed(0)}%
-                      </span>
+                      <span>{(currentProjection?.expectedProgress ?? 0).toFixed(0)}%</span>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
                       <div
-                        className={`h-2 rounded-full transition-all duration-500 ${
+                        className={`h-1.5 rounded-full transition-all duration-500 ${
                           currentProjection?.isPaused
                             ? "bg-yellow-500"
                             : currentProjection?.isBlocked
@@ -633,19 +667,26 @@ export function StationView({
                   </div>
                 </>
               ) : (
-                <div className="text-center py-8">
-                  <p className="text-lg text-gray-500 font-medium">
-                    No job selected
-                  </p>
-                  <p className="text-base text-gray-400 mt-2">
-                    The top priority scheduled job will appear here automatically
-                  </p>
+                <div className="text-center py-4">
+                  <p className="text-sm text-gray-500">No job selected</p>
+                  <p className="text-xs text-gray-400 mt-1">Top priority job will appear automatically</p>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="mb-6">
+          {(stationNumber === 1 || stationNumber === 2) && (
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                Title Centering Tool
+              </h3>
+              <div className="bg-gray-50 rounded p-3">
+                <TitleCenteringTool currentOrder={currentOrder} />
+              </div>
+            </div>
+          )}
+
+          <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-gray-700">Job Queue</h3>
               <label className="flex items-center gap-2 text-xs">
@@ -658,34 +699,34 @@ export function StationView({
                 Group Orders
               </label>
             </div>
-            <div className="bg-gray-50 rounded p-3">
-              <div className="space-y-2">
+            <div className="bg-gray-50 rounded p-2">
+              <div className="space-y-1">
                 {groupOrders ? (
                   // Grouped view with categories
                   <>
                     {todoOrders.length > 0 && (
                       <div>
                         <div className="text-xs font-semibold text-gray-600 mb-1 px-1">TODO</div>
-                        {todoOrders.slice(0, 5).map((order, index) => (
+                        {todoOrders.slice(0, 3).map((order, index) => (
                           <div
                             key={order.id}
                             onClick={() => setCurrentOrderId(order.id)}
-                            className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
+                            className={`flex justify-between items-center p-1 bg-white rounded border hover:border-blue-400 cursor-pointer ${
                               resolvedCurrentOrderId === order.id
                                 ? "border-blue-500 ring-1 ring-blue-300"
                                 : ""
                             }`}
                           >
                             <div className="flex-1">
-                              <div className="text-sm font-medium">
-                                Order #{order.id.slice(-6)}
+                              <div className="text-xs font-medium">
+                                #{order.displayId || order.id.slice(-6)}
                               </div>
-                              <div className="text-xs text-gray-500">
-                                {order.quantity}x {order.size} - {order.occasion}
+                              <div className="text-[10px] text-gray-500">
+                                {order.quantity}x {order.size}
                               </div>
                             </div>
                             <div className="text-right">
-                              <div className="text-xs text-gray-500">Ready</div>
+                              <div className="text-[10px] text-gray-500">Ready</div>
                             </div>
                           </div>
                         ))}
@@ -695,26 +736,26 @@ export function StationView({
                     {pendingOrders.length > 0 && (
                       <div>
                         <div className="text-xs font-semibold text-gray-600 mb-1 px-1">PENDING</div>
-                        {pendingOrders.slice(0, 5).map((order, index) => (
+                        {pendingOrders.slice(0, 3).map((order, index) => (
                           <div
                             key={order.id}
                             onClick={() => setCurrentOrderId(order.id)}
-                            className={`flex justify-between items-center p-2 bg-amber-50 rounded border hover:border-blue-400 cursor-pointer ${
+                            className={`flex justify-between items-center p-1 bg-amber-50 rounded border hover:border-blue-400 cursor-pointer ${
                               resolvedCurrentOrderId === order.id
                                 ? "border-blue-500 ring-1 ring-blue-300"
                                 : ""
                             }`}
                           >
                             <div className="flex-1">
-                              <div className="text-sm font-medium">
-                                Order #{order.id.slice(-6)}
+                              <div className="text-xs font-medium">
+                                #{order.displayId || order.id.slice(-6)}
                               </div>
-                              <div className="text-xs text-gray-500">
-                                {order.quantity}x {order.size} - {order.occasion}
+                              <div className="text-[10px] text-gray-500">
+                                {order.quantity}x {order.size}
                               </div>
                             </div>
                             <div className="text-right">
-                              <div className="text-xs text-gray-500">Waiting</div>
+                              <div className="text-[10px] text-gray-500">Wait</div>
                             </div>
                           </div>
                         ))}
@@ -724,26 +765,26 @@ export function StationView({
                     {completedOrders.length > 0 && (
                       <div>
                         <div className="text-xs font-semibold text-gray-600 mb-1 px-1">COMPLETED</div>
-                        {completedOrders.slice(0, 5).map((order, index) => (
+                        {completedOrders.slice(0, 2).map((order, index) => (
                           <div
                             key={order.id}
                             onClick={() => setCurrentOrderId(order.id)}
-                            className={`flex justify-between items-center p-2 bg-green-50 rounded border hover:border-blue-400 cursor-pointer ${
+                            className={`flex justify-between items-center p-1 bg-green-50 rounded border hover:border-blue-400 cursor-pointer ${
                               resolvedCurrentOrderId === order.id
                                 ? "border-blue-500 ring-1 ring-blue-300"
                                 : ""
                             }`}
                           >
                             <div className="flex-1">
-                              <div className="text-sm font-medium">
-                                Order #{order.id.slice(-6)}
+                              <div className="text-xs font-medium">
+                                #{order.displayId || order.id.slice(-6)}
                               </div>
-                              <div className="text-xs text-gray-500">
-                                {order.quantity}x {order.size} - {order.occasion}
+                              <div className="text-[10px] text-gray-500">
+                                {order.quantity}x {order.size}
                               </div>
                             </div>
                             <div className="text-right">
-                              <div className="text-xs text-gray-500">Done</div>
+                              <div className="text-[10px] text-gray-500">Done</div>
                             </div>
                           </div>
                         ))}
@@ -751,7 +792,7 @@ export function StationView({
                     )}
                     
                     {todoOrders.length === 0 && pendingOrders.length === 0 && completedOrders.length === 0 && (
-                      <div className="text-sm text-gray-500 text-center py-4">
+                      <div className="text-xs text-gray-500 text-center py-2">
                         No orders available
                       </div>
                     )}
@@ -759,32 +800,31 @@ export function StationView({
                 ) : (
                   // Priority view - show all orders by priority
                   <>
-                    {stationQueue.slice(0, 10).map((order, index) => (
+                    {stationQueue.slice(0, 5).map((order, index) => (
                       <div
                         key={order.id}
                         onClick={() => setCurrentOrderId(order.id)}
-                        className={`flex justify-between items-center p-2 bg-white rounded border hover:border-blue-400 cursor-pointer ${
+                        className={`flex justify-between items-center p-1 bg-white rounded border hover:border-blue-400 cursor-pointer ${
                           resolvedCurrentOrderId === order.id
                             ? "border-blue-500 ring-1 ring-blue-300"
                             : ""
                         }`}
                       >
                         <div className="flex-1">
-                          <div className="text-sm font-medium">
-                            Order #{order.id.slice(-6)}
+                          <div className="text-xs font-medium">
+                            #{order.id.slice(-6)}
                           </div>
-                          <div className="text-xs text-gray-500">
-                            {order.quantity}x {order.size} - {order.occasion}
+                          <div className="text-[10px] text-gray-500">
+                            {order.quantity}x {order.size}
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-xs text-gray-500">Priority</div>
-                          <div className="text-sm font-medium">{index + 1}</div>
+                          <div className="text-[10px] text-gray-500">P{index + 1}</div>
                         </div>
                       </div>
                     ))}
                     {stationQueue.length === 0 && (
-                      <div className="text-sm text-gray-500 text-center py-4">
+                      <div className="text-xs text-gray-500 text-center py-2">
                         No jobs in queue
                       </div>
                     )}
@@ -793,17 +833,6 @@ export function StationView({
               </div>
             </div>
           </div>
-
-          {(stationNumber === 1 || stationNumber === 2) && (
-            <div className="mb-6">
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                Title Centering Tool
-              </h3>
-              <div className="bg-gray-50 rounded p-3">
-                <TitleCenteringTool currentOrder={currentOrder} />
-              </div>
-            </div>
-          )}
 
           <div className="mb-6">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">
@@ -977,7 +1006,7 @@ export function StationView({
                   <div>
                     <span className="text-gray-600">Order:</span>
                     <span className="ml-2 font-medium">
-                      #{completedTask.orderId.slice(-6)}
+                      #{orders.find(o => o.id === completedTask.orderId)?.displayId || completedTask.orderId.slice(-6)}
                     </span>
                   </div>
                   <div>

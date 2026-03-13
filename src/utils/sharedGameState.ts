@@ -1,6 +1,8 @@
 import {
   ENVELOPE_CODE,
   PaperColor,
+  createDefaultGameParameters,
+  createStartingInventoryState,
   gameState,
   type GameParameters,
   type Order,
@@ -169,22 +171,39 @@ export function createDefaultOccasions(): string[] {
 export function createEmptySharedGameState(
   teamId: string,
 ): DeserializedSharedGameState {
+  const startingInventoryState = createStartingInventoryState(
+    (
+      amount,
+      reason,
+      type,
+      paperColor,
+      paperQuantity,
+      orderId,
+      pending,
+      deliveryTime,
+      metadata,
+    ) =>
+      gameState.createTransaction(
+        amount,
+        reason,
+        type,
+        paperColor,
+        paperQuantity,
+        orderId,
+        pending,
+        deliveryTime,
+        metadata,
+      ),
+  );
+
   return {
     teamId,
     orders: [],
-    paperInventory: {
-      w: 0,
-      g: 0,
-      p: 0,
-      y: 0,
-      b: 0,
-      s: 0,
-      [ENVELOPE_CODE]: 0,
-    },
-    transactions: [],
-    cash: 0,
+    paperInventory: startingInventoryState.paperInventory,
+    transactions: startingInventoryState.transactions,
+    cash: startingInventoryState.cash,
     parameters: {
-      ...gameState.getParameters(),
+      ...createDefaultGameParameters(),
       buyingCooldownEndTime: null,
     },
     currentSchedule: new Schedule("current", []),

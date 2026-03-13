@@ -106,31 +106,102 @@ export function TitleCenteringTool({ currentOrder }: TitleCenteringToolProps) {
                     {formatPosition(line.startPosition)}
                   </span>
                   <span className="text-gray-500">
-                    (place "{line.text[0]}" here)
+                    (place first "{line.text[0]}" at {formatPosition(line.startPosition)} and last "{line.text[line.text.length - 1]}" at {formatPosition(line.endPosition)})
                   </span>
                 </div>
 
-                {/* Compact visual representation */}
-                <div className="mt-2 bg-gray-50 p-1 rounded overflow-x-auto">
-                  <div className="flex items-center text-[10px] font-mono">
-                    {Array.from({ length: Math.min(maxCapacity, 15) }, (_, i) => {
-                      const position = i + 1;
-                      const letterIndex = position - line.startPosition;
-                      const letter = letterIndex >= 0 && letterIndex < line.text.length 
-                        ? line.text[letterIndex] 
-                        : "";
-                      
-                      return (
-                        <div 
-                          key={position} 
-                          className={`w-4 h-4 flex items-center justify-center border text-[8px] ${
-                            letter ? 'bg-blue-100 border-blue-300 font-bold' : 'bg-white border-gray-200'
-                          }`}
-                        >
-                          {letter || position}
-                        </div>
-                      );
-                    })}
+                {/* Large ruler visualization */}
+                <div className="mt-3 bg-gray-50 p-3 rounded overflow-x-auto">
+                  <div className="font-mono">
+                    {/* Ruler marks and numbers */}
+                    <div className="flex items-end">
+                      {Array.from({ length: maxCapacity + 2 }, (_, i) => {
+                        const rulerPos = i + 1;
+                        const isHalfPosition = title.length % 2 === 0;
+                        
+                        // For even-length titles, we show half positions (.5)
+                        if (isHalfPosition) {
+                          return (
+                            <div key={i} className="flex">
+                              {/* Main position */}
+                              <div className="flex flex-col items-center w-8">
+                                <div className="h-3 border-l-2 border-gray-600"></div>
+                                <span className="text-xs text-gray-700 font-semibold">{rulerPos}</span>
+                              </div>
+                              {/* Half position (except for the last one) */}
+                              {i < maxCapacity + 1 && (
+                                <div className="flex flex-col items-center w-8">
+                                  <div className="h-2 border-l border-gray-400"></div>
+                                  <span className="text-[10px] text-gray-500">{rulerPos}.5</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        } else {
+                          // For odd-length titles, show only whole numbers
+                          return (
+                            <div key={i} className="flex flex-col items-center w-10">
+                              <div className="h-3 border-l-2 border-gray-600"></div>
+                              <span className="text-xs text-gray-700 font-semibold">{rulerPos}</span>
+                            </div>
+                          );
+                        }
+                      })}
+                    </div>
+                    
+                    {/* Letters below ruler */}
+                    <div className="flex mt-1">
+                      {Array.from({ length: maxCapacity + 2 }, (_, i) => {
+                        const rulerPos = i + 1;
+                        const isEvenLength = title.length % 2 === 0;
+                        
+                        if (isEvenLength) {
+                          // For even-length titles, letters go at .5 positions
+                          const halfPosition = rulerPos + 0.5;
+                          const letterIndexAtHalf = halfPosition - line.startPosition;
+                          const letterAtHalf = letterIndexAtHalf >= 0 && letterIndexAtHalf < line.text.length 
+                            ? line.text[letterIndexAtHalf]
+                            : "";
+                          
+                          return (
+                            <div key={i} className="flex">
+                              {/* Empty space under whole number */}
+                              <div className="w-8 h-8 flex items-center justify-center">
+                                <span className="text-gray-300 text-[10px]">·</span>
+                              </div>
+                              {/* Letter under .5 position */}
+                              {i < maxCapacity + 1 && (
+                                <div className={`w-8 h-8 flex items-center justify-center ${
+                                  letterAtHalf ? 'bg-blue-100 border border-blue-300 rounded' : ''
+                                }`}>
+                                  {letterAtHalf && (
+                                    <span className="text-lg font-bold text-blue-700">{letterAtHalf}</span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        } else {
+                          // For odd-length titles, letters go at whole positions
+                          const letterIndex = rulerPos - line.startPosition;
+                          const letter = letterIndex >= 0 && letterIndex < line.text.length 
+                            ? line.text[letterIndex] 
+                            : "";
+                          
+                          return (
+                            <div key={i} className={`w-10 h-8 flex items-center justify-center ${
+                              letter ? 'bg-blue-100 border border-blue-300 rounded' : ''
+                            }`}>
+                              {letter ? (
+                                <span className="text-lg font-bold text-blue-700">{letter}</span>
+                              ) : (
+                                <span className="text-gray-300 text-[10px]">·</span>
+                              )}
+                            </div>
+                          );
+                        }
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>
