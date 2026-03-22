@@ -19,3 +19,5 @@ Transaction ledger for logging procurement and inter-team trades
 Processing times are modelled using time-study data and normal distributions, allowing the system to estimate the probability of late orders and adjust schedules accordingly.
 
 The tool was designed to support lean production principles, minimise bottlenecks, and ensure that limited production capacity is allocated to the most profitable orders.
+
+TODO: Fix cloud syncing bug
